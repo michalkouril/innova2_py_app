@@ -1,0 +1,15 @@
+version = 1
+SPDX-PackageName = "innova2_py_app"
+SPDX-PackageSupplier = "the innova2 contributors"
+
+[[annotations]]
+path = ["LICENSE_AUDIT.md", "README.md", "SHA256SUMS", "VERSION"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 the innova2 contributors"]
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["NOTICE"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 the innova2 contributors"]
+SPDX-License-Identifier = "Apache-2.0"

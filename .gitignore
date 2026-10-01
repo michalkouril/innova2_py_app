@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 the innova2 contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# module build artefacts
+innova2_areg_kmod/*.ko
+innova2_areg_kmod/*.o
+innova2_areg_kmod/*.mod
+innova2_areg_kmod/*.mod.c
+innova2_areg_kmod/Module.symvers
+innova2_areg_kmod/modules.order
+innova2_areg_kmod/.*.cmd
+# burn read-back scratch
+.innova2_verify.bin
+__pycache__/

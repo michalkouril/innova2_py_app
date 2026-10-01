@@ -1,0 +1,8 @@
+innova2_py_app -- host tools for the Innova-2 card.
+Copyright 2026 the innova2 contributors. Licensed under the Apache License, Version 2.0 (LICENSE),
+except innova2_areg_kmod/ (GPL-2.0-only, a Linux kernel module).
+
+Third-party material:
+* Register maps, field layouts and formulas transcribed from Mellanox's Innova_2_Flex_Open_18_12 application and
+  include/linux/mlx5/mlx5_ifc_fpga.h, Copyright Mellanox Technologies Ltd., dual GPL-2.0 / OpenIB.org BSD; used
+  under the OpenIB.org BSD licence (LICENSES/Linux-OpenIB.txt).
