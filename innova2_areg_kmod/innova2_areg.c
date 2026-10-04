@@ -6,9 +6,9 @@
  * mlx5 knows nothing about FPGAs.
  *
  * WHAT IT REPLACES
- *   `mlx5_fpga_tools` (drivers/net/ethernet/mellanox/mlx5/fpga/tools_char.c) shipped only in
- *   OFED 5.2-era packages.  OFED 23.10 and every DOCA-OFED (3.5.0 = mlnx-ofed-kernel 2607.x) still
- *   carry the in-kernel FPGA core -- mlx5_fpga_query(), mlx5_fpga_image_select(),
+ *   `mlx5_fpga_tools` (drivers/net/ethernet/mellanox/mlx5/fpga/tools_char.c) last shipped in
+ *   MLNX_OFED 5.2; 5.3 removed it.  Later releases (checked: OFED 23.10, DOCA-OFED 3.5.0 =
+ *   mlnx-ofed-kernel 2607.x) still carry the in-kernel FPGA core -- mlx5_fpga_query(), mlx5_fpga_image_select(),
  *   mlx5_fpga_access_reg() are all still in .../mlx5/core/fpga/cmd.c -- but they DROP tools_char.c,
  *   so /dev/<bdf>_mlx5_fpga_tools never appears and every ioctl/lseek tool stops working.
  *

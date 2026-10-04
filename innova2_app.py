@@ -10,8 +10,8 @@
 WHY THIS EXISTS
 ---------------
 The vendor app talks to the ConnectX-5 through /dev/<bdf>_mlx5_fpga_tools, a chardev created by the
-`mlx5_fpga_tools` module.  That module ships ONLY in OFED 5.2-era packages.  OFED 23.10 and every
-DOCA-OFED still carry the in-kernel FPGA core (mlx5_fpga_query / mlx5_fpga_image_select /
+`mlx5_fpga_tools` module.  MLNX_OFED 5.2 is the last release that ships it; 5.3 removed it (5.3
+release notes).  Later releases (checked: OFED 23.10, DOCA-OFED 3.5.0) still carry the in-kernel FPGA core (mlx5_fpga_query / mlx5_fpga_image_select /
 mlx5_fpga_access_reg are all still in .../mlx5/core/fpga/cmd.c) but they DROP tools_char.c, so the
 node never appears and the vendor binary dies at startup.  Measured under DOCA-OFED 3.5.0
 (`OFED-internal-26.07-0.7.7`): `modinfo mlx5_fpga_tools` -> "Module not found".
@@ -29,10 +29,10 @@ available at run time:
 
 THE TWO TRANSPORTS, AND WHY BOTH ARE NEEDED (all measured)
 ----------------------------------------------------------
-  "node"   -- /dev/<bdf>_mlx5_fpga_tools.  Supplied either by the vendor mlx5_fpga_tools (OFED 5.2)
-              or, on any modern kernel, by innova2_areg_kmod/innova2_areg.ko (this package), which
-              re-creates the SAME node with the SAME ioctl numbers on top of the exported
-              mlx5_core_access_reg().  Does everything.
+  "kmod"   -- /dev/<bdf>_mlx5_fpga_tools, the device node of a kernel module ("node" in 1.1.0).
+              Supplied either by the vendor mlx5_fpga_tools (OFED 5.2) or, on any modern kernel,
+              by innova2_areg_kmod/innova2_areg.ko (this package), which re-creates the SAME node
+              with the SAME ioctl numbers on top of the exported mlx5_core_access_reg().  Does everything.
   "mlxreg" -- MFT through the PCI Vendor-Specific Capability (ICMD) gateway, the FPGA registers sent raw
               (by ID and length).  Needs NO kernel module at all and survives any OFED.
               Does FPGA_CAP read, FPGA_CTRL read, and FPGA_ACCESS_REG read AND write.
@@ -204,7 +204,7 @@ class CrRefused(Exception):
 class NodeTransport:
     """/dev/<bdf>_mlx5_fpga_tools -- vendor mlx5_fpga_tools, or our innova2_areg.ko."""
 
-    name = "node"
+    name = "kmod"
     can_ctrl_write = True
 
     def __init__(self, bdf):
@@ -449,7 +449,8 @@ class Innova2:
         self.fallback = None
         errs = []
         order = {"auto": [NodeTransport, MlxregTransport],
-                 "node": [NodeTransport],
+                 "kmod": [NodeTransport],
+                 "node": [NodeTransport],               # 1.1.0 name, still accepted
                  "mlxreg": [MlxregTransport]}[want]
         for cls in order:
             try:
@@ -459,12 +460,12 @@ class Innova2:
                 errs.append("%s: %s" % (cls.name, e))
         if self.t is None:
             raise SystemExit("*** no usable transport for %s\n    %s\n"
-                             "    node   needs mlx5_fpga_tools (OFED 5.2) or innova2_areg.ko\n"
+                             "    kmod   needs mlx5_fpga_tools (OFED 5.2) or innova2_areg.ko\n"
                              "    mlxreg needs MFT (or mstflint's mstreg)"
                              % (bdf, "\n    ".join(errs)))
         # A second transport, when available, is what makes a write checkable against something
         # other than itself. Opt-in (--cross-check): a normal run never starts an MFT/mstflint tool.
-        if cross_check and self.t.name == "node":
+        if cross_check and self.t.name == "kmod":
             try:
                 self.fallback = MlxregTransport(bdf)
             except Exception:                           # noqa: BLE001 -- optional
@@ -1497,7 +1498,8 @@ USAGE = """-----------------------------------------------
   --log_name [name] - user defined file name.
        By default %s
   --no_log - log will not print to the file
- [ext] --transport auto|node|mlxreg   ConnectX register transport (default auto; mlxreg = MFT mlxreg or mstflint mstreg)
+ [ext] --transport auto|kmod|mlxreg   ConnectX register transport (default auto; kmod = kernel module device node,
+                                      mlxreg = MFT mlxreg or mstflint mstreg)
  [ext] --cross-check                  confirm image-select/JTAG writes via mlxreg/mstreg too (off by default)
  [ext] --batch <cmd> [args]           query health identity temp fan ddr pcitest crrd crwr
                                       image-sel <user|flex|flex3> jtag-on jtag-off

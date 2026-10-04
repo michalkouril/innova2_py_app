@@ -10,8 +10,8 @@
 # WHAT THIS REPLACES
 # ------------------
 # The vendor app talks to the ConnectX-5 through /dev/<bdf>_mlx5_fpga_tools, a chardev created by the
-# `mlx5_fpga_tools` module. That module ships only in OFED 5.2-era packages: OFED 23.10 and every DOCA-OFED still
-# carry the in-kernel FPGA core (drivers/.../mlx5/core/fpga/{cmd,core,conn,sdk}.c) but DROP tools_char.c, so the
+# `mlx5_fpga_tools` module. MLNX_OFED 5.2 is the last release that ships it; 5.3 removed it. Later releases
+# (checked: OFED 23.10, DOCA-OFED 3.5.0) still carry the in-kernel FPGA core (drivers/.../mlx5/core/fpga/{cmd,core,conn,sdk}.c) but DROP tools_char.c, so the
 # node is gone and every ioctl/lseek-based tool stops working.
 #
 # WHY THIS WORKS ANYWAY
