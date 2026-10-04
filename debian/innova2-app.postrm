@@ -1,0 +1,13 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 the innova2 contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+if [ "$1" = purge ]; then
+    rm -rf /var/lib/innova2-app
+fi
+
+#DEBHELPER#
+
+exit 0

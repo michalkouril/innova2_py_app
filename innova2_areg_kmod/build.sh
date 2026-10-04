@@ -22,6 +22,14 @@ K=$(uname -r)
 VER=1.0
 NAME=innova2-areg
 
+# The innova2-areg-dkms package registers the same DKMS name and version; leave it to dpkg.
+case "${1:-build}" in install|uninstall)
+  if dpkg-query -W -f='${Status}' innova2-areg-dkms 2>/dev/null | grep -q 'install ok installed'; then
+    echo "the innova2-areg-dkms package manages this module -- use apt/dpkg instead (skipping '$1')"
+    exit 0
+  fi;;
+esac
+
 case "${1:-build}" in
 uninstall)
   sudo rmmod innova2_areg 2>/dev/null || true

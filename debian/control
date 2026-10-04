@@ -1,0 +1,37 @@
+Source: innova2-app
+Section: utils
+Priority: optional
+Maintainer: Michal Kouril <xmkouril@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Homepage: https://github.com/michalkouril/innova2_py_app
+Rules-Requires-Root: no
+
+Package: innova2-app
+Architecture: all
+Depends: python3 (>= 3.8), ${misc:Depends}
+Recommends: innova2-areg-dkms
+Suggests: mstflint
+Description: management app for the Mellanox Innova-2 Flex FPGA card
+ innova2_app does what Mellanox's innova2_flex_app 18.07.00 did, with the
+ same menus and options: query and select the FPGA image, grant JTAG access,
+ read identity, temperature, fan and power, run the DDR and PCI tests, and
+ burn a User image into flash. It works on current kernels and
+ MLNX_OFED/DOCA-OFED releases, which no longer ship mlx5_fpga_tools.
+ .
+ Image select and the JTAG grant need the innova2-areg-dkms kernel module
+ (or the vendor mlx5_fpga_tools module from MLNX_OFED 5.2). Without it, the
+ card can still be queried through MFT's mlxreg or mstflint's mstreg.
+
+Package: innova2-areg-dkms
+Architecture: all
+Depends: dkms, ${misc:Depends}
+Recommends: linux-headers-generic | linux-headers
+Description: innova2_areg kernel module (DKMS) for the Innova-2 Flex card
+ Re-creates the /dev/<bdf>_mlx5_fpga_tools device node, with the vendor's
+ ioctls, on top of the kernel's exported mlx5_core_access_reg(). This is what
+ innova2_app needs for image select and the JTAG grant on kernels and OFED
+ releases without the vendor mlx5_fpga_tools module (MLNX_OFED 5.3 and later).
+ .
+ DKMS rebuilds the module on every kernel or OFED update, and it is loaded at
+ boot. Do not install it on a host that still has the vendor module.

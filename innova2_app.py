@@ -85,6 +85,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
+# Scratch for the burn read-back: the .deb creates /var/lib/innova2-app (its HERE is /usr/lib/innova2-app,
+# which a package must not write into); an install.sh or source-tree install uses the app's own folder.
+STATE = "/var/lib/innova2-app" if os.path.isdir("/var/lib/innova2-app") else HERE
 
 # ---------------------------------------------------------------- vendor constants
 IMAGES = {0: "Innova2 User Image", 1: "Innova2 Factory Image",
@@ -1026,7 +1029,7 @@ def verify_burn(b):
     good = 0
     for off in offs:
         want = data[off:off + 4096]
-        out = os.path.join(HERE, ".innova2_verify.bin")      # next to the app: persistent, not /tmp
+        out = os.path.join(STATE, ".innova2_verify.bin")     # persistent, not /tmp
         r = subprocess.run([sys.executable, rawspi, "dump", str(b["flash"]), "%x" % (b["flash_offset"] + off),
                             "%x" % len(want), out], env=dict(os.environ, BDF=C.bope_bdf),
                            capture_output=True, text=True)

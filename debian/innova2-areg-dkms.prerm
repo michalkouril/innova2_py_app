@@ -1,0 +1,19 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 the innova2 contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+NAME=innova2-areg
+VER=1.0
+
+case "$1" in
+    remove|upgrade|deconfigure)
+        modprobe -r innova2_areg 2>/dev/null || true
+        dkms remove -m $NAME -v $VER --all >/dev/null 2>&1 || true
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

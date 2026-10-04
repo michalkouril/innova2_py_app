@@ -1,0 +1,43 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 the innova2 contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+set -e
+
+NAME=innova2-areg
+VER=1.0
+
+if [ "$1" = configure ]; then
+    # install.sh/build.sh may already have registered the same name and version: start clean.
+    if dkms status -m $NAME -v $VER 2>/dev/null | grep -q .; then
+        dkms remove -m $NAME -v $VER --all >/dev/null 2>&1 || true
+    fi
+    dkms add -m $NAME -v $VER
+    # Also build for the other installed kernels that have headers, so booting one of them finds the
+    # module; DKMS's kernel hooks cover kernels installed later.
+    for b in /lib/modules/*/build; do
+        k=$(basename "$(dirname "$b")")
+        [ -d "$b" ] && [ "$k" != "$(uname -r)" ] || continue
+        dkms install -m $NAME -v $VER -k "$k" >/dev/null 2>&1 \
+            || echo "note: innova2_areg did not build for $k (not the running kernel; skipped)" >&2
+    done
+    # Build for the running kernel now. A failed build must
+    # not leave dpkg half-configured, but it must not pass silently either: without the module, image
+    # select and the JTAG grant are unavailable, which looks like a dead card.
+    if ! dkms install -m $NAME -v $VER -k "$(uname -r)"; then
+        echo "*** innova2_areg did not build for $(uname -r). Install that kernel's headers, then run:" >&2
+        echo "***   sudo dkms install -m $NAME -v $VER" >&2
+        exit 0
+    fi
+    if ls /dev/*_mlx5_fpga_tools >/dev/null 2>&1 && ! grep -q '^innova2_areg ' /proc/modules; then
+        echo "note: a vendor mlx5_fpga_tools node already exists; not loading innova2_areg (not needed)." >&2
+        echo "      Remove innova2-areg-dkms on this host: the vendor module and this one both create that node." >&2
+    else
+        modprobe -r innova2_areg 2>/dev/null || true
+        modprobe innova2_areg || echo "*** modprobe innova2_areg failed -- see dmesg" >&2
+    fi
+fi
+
+#DEBHELPER#
+
+exit 0

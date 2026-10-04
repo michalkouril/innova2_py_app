@@ -1,6 +1,6 @@
 # innova2_app — Innova-2 management app for current Mellanox/NVIDIA drivers
 
-Version 1.1.0 (2026-10-01).
+Version 1.2.0 (2026-10-04).
 
 `innova2_app` manages the Xilinx FPGA on a Mellanox Innova-2 Flex card. It does what Mellanox's
 `innova2_flex_app` 18.07.00 did, with the same menus and options:
@@ -49,6 +49,8 @@ still accepted.)
 | `innova2_areg_kmod/` | `innova2_areg.ko` source (GPL-2.0). It re-creates the vendor device node, with the same ioctls, on top of the kernel's exported `mlx5_core_access_reg()`. `build.sh install` registers it with DKMS so it rebuilds on kernel/OFED updates, and loads it at boot. |
 | `innova2_areg.sh` | query, capabilities and CR reads/writes as a shell script over `mlxreg`/`mstreg`, for hosts without Python. Image select and the JTAG grant are refused there (the firmware rejects them on that path); use `innova2_app`. |
 | `install.sh` | copies everything to `/opt/innova2_app`, links the commands into `/usr/local/bin`, and installs the kernel module. |
+| `debian/` | Debian/Ubuntu packaging: `innova2-app` and `innova2-areg-dkms` (see Install). |
+| `packaging/rpm/innova2-app.spec` | RPM spec for the same two packages. A placeholder: it builds, but has not been tested on an RPM-based host. |
 
 ## Requirements
 
@@ -61,6 +63,30 @@ still accepted.)
   `--cross-check`; XRT's `/opt/xilinx/xrt/bin/xbflash.qspi` for burning from a running User image.
 
 ## Install
+
+### Debian/Ubuntu packages
+
+Two packages, built from this folder (needs `debhelper`; the `.deb` files land in the parent folder):
+
+```
+dpkg-buildpackage -us -uc -b
+sudo apt install ../innova2-app_*_all.deb ../innova2-areg-dkms_*_all.deb
+sudo innova2_app --batch query
+```
+
+* **`innova2-app`**: the app, `rawspi.py` and `innova2_areg.sh` in `/usr/lib/innova2-app`, with the commands
+  `innova2_app` and `innova2_areg` in `/usr/bin`.
+* **`innova2-areg-dkms`**: the kernel module. Installing it registers the module with DKMS, builds it for the
+  running kernel and loads it, and it is loaded at boot from then on. It needs `dkms` and the running kernel's
+  headers. Leave it out (`innova2-app` only recommends it) if you only need the `mlxreg` path, or on a host that still
+  has the vendor `mlx5_fpga_tools` module: both modules create the same device node.
+
+`sudo apt remove innova2-app innova2-areg-dkms` removes both, including the DKMS registration.
+
+If you used `install.sh` before, remove that install first with `sudo ./install.sh --uninstall`. Once the packages
+are installed, `install.sh` leaves the kernel module alone: the package manages it.
+
+### Without packages
 
 ```
 sudo ./install.sh              # or: sudo ./install.sh --no-kmod   (no kernel module: query/CR only, through mlxreg/mstreg)
@@ -117,7 +143,7 @@ Either way, then select the User image and **cold** cycle the host. The FPGA rea
   read them through XRT (`xbutil examine`).
 * **Image select takes effect only on a cold power cycle**, exactly as with the vendor app.
 * **`mlxreg` cannot do `FPGA_CTRL` writes** (image select, JTAG grant). Install the kernel module for those.
-* **The kernel module is tied to `mlx5_core`'s symbol CRC.** Install it through DKMS (`install.sh` does), or it
+* **The kernel module is tied to `mlx5_core`'s symbol CRC.** Install it through DKMS (the package and `install.sh` both do), or it
   will silently stop loading after the next kernel or OFED update.
 
 ## Tested on

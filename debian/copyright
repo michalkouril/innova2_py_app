@@ -1,0 +1,51 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: innova2_py_app
+Source: https://github.com/michalkouril/innova2_py_app
+
+Files: *
+Copyright: 2026 the innova2 contributors
+License: Apache-2.0
+
+Files: innova2_app.py innova2_areg.sh
+Copyright: 2026 the innova2 contributors
+           Mellanox Technologies Ltd.
+License: Apache-2.0 and Linux-OpenIB
+Comment: Register maps, field layouts and formulas transcribed from Mellanox's
+ Innova_2_Flex_Open_18_12 application and include/linux/mlx5/mlx5_ifc_fpga.h,
+ dual GPL-2.0 / OpenIB.org BSD, used under the OpenIB.org BSD licence.
+
+Files: innova2_areg_kmod/*
+Copyright: 2026 the innova2 contributors
+License: GPL-2.0-only
+
+License: Apache-2.0
+ On Debian systems, the full text of the Apache License, Version 2.0 is in
+ /usr/share/common-licenses/Apache-2.0.
+
+License: GPL-2.0-only
+ This program is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License version 2 as published by the
+ Free Software Foundation.
+ .
+ On Debian systems, the full text of the GNU General Public License version 2
+ is in /usr/share/common-licenses/GPL-2.
+
+License: Linux-OpenIB
+ Redistribution and use in source and binary forms, with or
+ without modification, are permitted provided that the following
+ conditions are met:
+ .
+ - Redistributions of source code must retain the above copyright notice, this
+ list of conditions and the following disclaimer.
+ .
+ - Redistributions in binary form must reproduce the above copyright notice,
+ this list of conditions and the following disclaimer in the documentation
+ and/or other materials provided with the distribution.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.

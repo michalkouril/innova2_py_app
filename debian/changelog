@@ -1,0 +1,12 @@
+innova2-app (1.2.0) unstable; urgency=medium
+
+  * First Debian packaging: innova2-app (the app) and innova2-areg-dkms
+    (the innova2_areg kernel module, built by DKMS for every installed
+    kernel that has headers).
+  * --transport kmod replaces --transport node (still accepted).
+  * The burn read-back scratch file goes to /var/lib/innova2-app when it
+    exists.
+  * build.sh leaves the module alone when innova2-areg-dkms manages it.
+  * README: reorganised; mlx5_fpga_tools was removed in MLNX_OFED 5.3.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Sun, 04 Oct 2026 13:15:06 -0400

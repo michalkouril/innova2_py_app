@@ -13,3 +13,9 @@ path = ["NOTICE"]
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 the innova2 contributors"]
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["debian/**"]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 the innova2 contributors"]
+SPDX-License-Identifier = "Apache-2.0"

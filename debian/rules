@@ -1,0 +1,25 @@
+#!/usr/bin/make -f
+# SPDX-FileCopyrightText: 2026 the innova2 contributors
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Must match PACKAGE_VERSION in innova2_areg_kmod/dkms.conf (and VER in build.sh).
+DKMS_VER := 1.0
+
+%:
+	dh $@
+
+# Nothing to build: the app is Python, and DKMS builds the module on the target host.
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_install:
+
+override_dh_install:
+	dh_install
+	install -d debian/innova2-areg-dkms/usr/src/innova2-areg-$(DKMS_VER)
+	install -m 644 innova2_areg_kmod/innova2_areg.c innova2_areg_kmod/Makefile innova2_areg_kmod/dkms.conf \
+		debian/innova2-areg-dkms/usr/src/innova2-areg-$(DKMS_VER)/
+	grep -qx 'PACKAGE_VERSION="$(DKMS_VER)"' innova2_areg_kmod/dkms.conf
+
+# The app is a script; keep it out of dh_python3's way.
+override_dh_python3:

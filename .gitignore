@@ -13,3 +13,12 @@ innova2_areg_kmod/.*.cmd
 # burn read-back scratch
 .innova2_verify.bin
 __pycache__/
+# dpkg-buildpackage leftovers (the .deb files themselves land in the parent folder)
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
+debian/innova2-app/
+debian/innova2-areg-dkms/
