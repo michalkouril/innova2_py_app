@@ -22,3 +22,5 @@ debian/*.debhelper
 debian/*.debhelper.log
 debian/innova2-app/
 debian/innova2-areg-dkms/
+# innova2-smi unit-test scratch (never /tmp)
+tests/.state/

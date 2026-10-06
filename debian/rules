@@ -11,8 +11,13 @@ DKMS_VER := 1.0
 
 # Nothing to build: the app is Python, and DKMS builds the module on the target host.
 override_dh_auto_build:
-override_dh_auto_test:
 override_dh_auto_install:
+
+# innova2-smi's unit tests run against mock hosts (no hardware); skipped with DEB_BUILD_OPTIONS=nocheck.
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	python3 -m unittest discover -s tests
+endif
 
 override_dh_install:
 	dh_install

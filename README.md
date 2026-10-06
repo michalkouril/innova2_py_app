@@ -1,6 +1,7 @@
 # innova2_app — Innova-2 management app for current Mellanox/NVIDIA drivers
 
-Version 1.2.0 (2026-10-04).
+Version 1.3.0 (2026-10-06). New in 1.3.0: [`innova2-smi`](#innova2-smi--query-and-test-the-xrt-shell), which queries and tests
+the Innova-2 XRT shell. `innova2_app` itself is unchanged.
 
 `innova2_app` manages the Xilinx FPGA on a Mellanox Innova-2 Flex card. It does what Mellanox's
 `innova2_flex_app` 18.07.00 did, with the same menus and options:
@@ -45,6 +46,9 @@ still accepted.)
 | file | what |
 |---|---|
 | `innova2_app.py` | the app. Vendor menus and options, plus `[ext]` batch commands (`--batch …`, `--transport`, `--yes`). |
+| `innova2_smi.py` (+ `innova2_smi_*.py`) | `innova2-smi`: query and test the Innova-2 XRT shell (see below). `innova2_smi_regmap.py` holds the register maps, `_hw` discovery and guarded MMIO, `_check` the passive check and its rules table, `_tests` / `_xrt` the active tests. |
+| `docs/innova2_smi_regmap.md` | the shell register map innova2-smi uses, generated from `innova2_smi_regmap.py` (`innova2-smi regmap --markdown`) and checked against `ddr_health.v` (`regmap --check-rtl`). |
+| `tests/` | innova2-smi unit tests against mock hosts (`python3 -m unittest discover -s tests`). |
 | `rawspi.py` | direct access to both flash chips. The app uses it to check that both chips answer before burning from a running User image, and to verify a burn: first and last 4 KB plus 14 spread blocks. |
 | `innova2_areg_kmod/` | `innova2_areg.ko` source (GPL-2.0). It re-creates the vendor device node, with the same ioctls, on top of the kernel's exported `mlx5_core_access_reg()`. `build.sh install` registers it with DKMS so it rebuilds on kernel/OFED updates, and loads it at boot. |
 | `innova2_areg.sh` | query, capabilities and CR reads/writes as a shell script over `mlxreg`/`mstreg`, for hosts without Python. Image select and the JTAG grant are refused there (the firmware rejects them on that path); use `innova2_app`. |
@@ -74,8 +78,8 @@ sudo apt install ../innova2-app_*_all.deb ../innova2-areg-dkms_*_all.deb
 sudo innova2_app --batch query
 ```
 
-* **`innova2-app`**: the app, `rawspi.py` and `innova2_areg.sh` in `/usr/lib/innova2-app`, with the commands
-  `innova2_app` and `innova2_areg` in `/usr/bin`.
+* **`innova2-app`**: the app, `rawspi.py`, `innova2_areg.sh` and `innova2-smi` in `/usr/lib/innova2-app`, with the
+  commands `innova2_app`, `innova2_areg` and `innova2-smi` in `/usr/bin`.
 * **`innova2-areg-dkms`**: the kernel module. Installing it registers the module with DKMS, builds it for the
   running kernel and loads it, and it is loaded at boot from then on. It needs `dkms` and the running kernel's
   headers. Leave it out (`innova2-app` only recommends it) if you only need the `mlxreg` path, or on a host that still
@@ -135,6 +139,83 @@ running at the time.
   The vendor app refuses to burn while a User image runs, so this path exists only as a batch command.
 
 Either way, then select the User image and **cold** cycle the host. The FPGA reads flash only at power-on.
+
+## innova2-smi — query and test the XRT shell
+
+`innova2-smi` is for the Innova-2 **XRT shell** (the fp8c lineage: E6b, E6b-2400, E6b-2400dw8, E7a2, E7a3,
+E7a3-2666ca48). It finds every card from its ConnectX-5, works out what the FPGA is running, and reads the shell's
+health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, XRT's sysfs). Run it as root.
+
+| command | what |
+|---|---|
+| `innova2-smi list` | every card: ConnectX-5 BDFs and serial, FPGA functions, FPGA state, the image the ConnectX reports, shell (VBNV, ROM_TS, OBS_ID, build), XRT Device Ready |
+| `innova2-smi status [-d CARD]` | one screen: identity and board check, clocks, DDR mode/calibration/ECC (first-fail decoded), link-downs, fenced accesses, every temperature source (LIVE / STALE / UNRELIABLE), voltages, throttle, PCIe, PR count, uptime, P2P / PEER windows / PLRAM alias, the last flight-recorder records |
+| `innova2-smi check [-d CARD\|--all]` | passive, concerns only: one line per WARN/FAIL with evidence and a hint, or `OK: no concerns`. Exit 0 OK, 1 WARN, 2 FAIL (for cron). `--interval S` (default 1) takes two snapshots for rates; `--since-boot` takes one; `-v` adds the known-benign INFO items; `--rules` prints the rules table. `status --concerns` is an alias. |
+| `innova2-smi counters [-d CARD] [--watch N]` | every counter and register the running shell exposes, from its OBS_ID map, plus SYSMON, XRT's clock wizards and frequency counters, the cmc sensors, the PEER/alias counters and AER; `--watch` shows deltas |
+| `innova2-smi recorder [-n N]` | the flight recorder, decoded (E7a2 and later) |
+| `innova2-smi clear` / `ddr-mode [on\|off\|emu\|hybrid]` | controls, with confirmation (or `--yes`) |
+| `innova2-smi throttle ...` | show, `force 2\|4`, `off`, `enable`, `gate`, `thresholds`, `thresholds2`, `tierlevel`, `failsafe`, `defaults`, `simulate-hot tier1\|tier2`, `restore` |
+| `innova2-smi test NAME\|all` | active tests (below) |
+| `innova2-smi regmap` | the register maps; `--markdown`, `--check-rtl ddr_health.v` |
+
+`-d` takes a card index, any BDF on the card (ConnectX or FPGA, `08:00` is enough) or the board serial. Every query
+takes `--json`. `innova2-smi <command> -h` documents each command.
+
+**Safety.** Read-only unless you give a control command, and every state change asks first (or needs `--yes`).
+* An undecoded management-PF read hard-locks these hosts. So the tool identifies the shell step by step: the
+  management function, its BAR0 and memory decoding, `xclmgmt` bound, the feature ROM in sysfs, the platform name,
+  then OBS_ID (0x36030), the first register it reads. From then on every access is checked against that OBS_ID's
+  register map (`docs/innova2_smi_regmap.md`), and an OBS_ID it does not know stops all further access.
+* Register accesses are single ctypes 32-bit loads/stores (a python mmap slice issues them twice), and only the
+  few 4 KB windows in use are mapped.
+* No command writes flash; `test flash-verify` only reads it. Nothing unloads `xocl`.
+* Before any xclbin is loaded, its feature-ROM timestamp and platform name are compared with the running shell's.
+  `test validate` makes the shared validate dir (`/opt/xilinx/dsa/<VBNV>/test`, one per platform name, whatever
+  shell is flashed) point at this shell's kernels when it is a symlink with a matching sibling (`test.<tag>`), and
+  points it back afterwards.
+* `check` is strictly passive: loads only (not even the recorder's index register), sysfs, the xrt-smi device
+  table. It never opens an XRT context, so it can run while kernels and DMA run.
+
+**Card states.** `OUR_SHELL` (full status), `OUR_SHELL_OLD` (a pre-fp8c shell: identity only),
+`OUR_SHELL_UNREADABLE` (a shell device whose BAR, driver, ROM or OBS_ID check failed; the failing step is
+reported and nothing past it is read), `FLEX` (the Flex/Factory image), `FPGA_MISSING` (ConnectX-5 present, no FPGA
+function), `OTHER_XILINX` (e.g. the DDR tester 10ee:9038). The ConnectX's own view of the FPGA image is shown too
+when `mlx5_fpga_tools` or `innova2_areg` (or MFT) is available; a disagreement is reported as a FAIL.
+
+**Tests.** Tests that load xclbins or use DDR ask first or need `--yes`.
+
+| test | does | needs |
+|---|---|---|
+| `validate` | `xrt-smi validate` with this shell's kernels in the validate dir; ECC/fence deltas | XRT |
+| `p2p` | `xrt-smi validate -r p2p` | P2P enabled |
+| `ddr-soak` | fill bank 0 (address-derived pattern) and read it back `--passes` times, ECC per pass | pyxrt, numpy |
+| `temp-live` | every temperature source live and in agreement (read-only) | — |
+| `ecc-live` | ECC poller alive (read-only); with `--arm` + a warm reboot, proves the counters count on stale DRAM | pyxrt for `--arm` |
+| `throttle` | walks FULL → tier 1 → tier 2 → hysteresis → release, FULL → tier 2 directly, per-tier levels, FORCE, with the delivered DATA_CLK measured by a lat_probe kernel each step; restores the settings | `--xclbin` with lat_probe (`regress_plram_prog.xclbin` of the shell build) |
+| `pr-stress` | `--loads` xclbin loads (half with the throttle forced on, on E7 shells), Device Ready / firewall / DDR gate / PR count after each | XRT |
+| `flash-verify` | reads the User slot of both flash chips through the shell's quad-SPI controller and compares with `--primary/--secondary` (.bin) or `--mcs-prefix`; exact length, any SPI stall fails (re-run) | — |
+
+`test all` runs those whose prerequisites are given. Exit 0 = all PASS/SKIP, 1 = a FAIL, 2 = only INCONCLUSIVE.
+
+**Simulating heat.** `innova2-smi throttle simulate-hot tier1|tier2 [--seconds S] [--xclbin X]` moves the tier
+thresholds below the live temperature, so the shell's own state machine enters the tier. It shows the tier, the
+delivered clock and the recorder's tier entries, and after S seconds (or Ctrl-C) restores the exact previous values
+and confirms the release. The shell has no temperature-override register, so no sensor value is faked. The previous
+values are saved to `~/.cache/innova2-smi/` first; `innova2-smi throttle restore` recovers them after a crash.
+`throttle force 2|4` and `throttle off` force the throttle directly, bypassing the automatic path.
+
+**Verified on hardware (2026-10-06, x440: card 03:00 E6b, card 08:00 E6b-2400dw8, both OBS_ID 0x0B5E0002, read-only):**
+`list`, `status` (text and `--json`), `check` (`--all`, `--since-boot`, `status --concerns`), `counters` (incl.
+`--watch`), `test temp-live`, `test ecc-live` (poller check), and the refusals (`recorder` on an E4-layout shell, a
+test without `--yes`). On that host `check` found three real items: card 03's slot link runs x1 (riser) with its FPGA
+link at x4, its root port had logged ~7,500 correctable AER errors since boot, and card 08's shared validate dir
+pointed at E6b's kernels. **Unit tests only (mock register maps for OBS_ID 0x0B5E0002/4/5/6/7):** the E7a2/E7a3
+paths (throttle, tiers, simulate-hot, recorder), the controls, the xclbin-loading tests (`validate`, `p2p`,
+`ddr-soak`, `ecc-live --arm`, `throttle`, `pr-stress`) and `flash-verify`.
+
+innova2-smi takes XRT's Device Ready from sysfs, not from `xrt-smi examine`: on x440 one `examine` added ~400
+correctable AER errors on card 03's marginal link, while a whole `innova2-smi status` or `check` adds about ten
+(the idle rate there is ~20 a minute).
 
 ## Behaviour to know about
 

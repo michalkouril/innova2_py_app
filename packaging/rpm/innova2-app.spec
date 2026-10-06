@@ -15,9 +15,9 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version:        1.2.0
+Version:        1.3.0
 Release:        0.1%{?dist}
-Summary:        Management app for the Mellanox Innova-2 Flex FPGA card
+Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
 URL:            https://github.com/michalkouril/innova2_py_app
 Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz#/innova2_py_app-%{version}.tar.gz
@@ -53,13 +53,20 @@ grep -qx 'PACKAGE_VERSION="%{dkms_ver}"' innova2_areg_kmod/dkms.conf
 
 %install
 install -d %{buildroot}%{_prefix}/lib/innova2-app %{buildroot}%{_bindir} %{buildroot}%{_localstatedir}/lib/innova2-app
-install -m 755 innova2_app.py rawspi.py innova2_areg.sh %{buildroot}%{_prefix}/lib/innova2-app/
+install -m 755 innova2_app.py rawspi.py innova2_areg.sh innova2_smi.py %{buildroot}%{_prefix}/lib/innova2-app/
+install -m 644 innova2_smi_regmap.py innova2_smi_hw.py innova2_smi_check.py innova2_smi_tests.py innova2_smi_xrt.py \
+    VERSION %{buildroot}%{_prefix}/lib/innova2-app/
 ln -s ../lib/innova2-app/innova2_app.py %{buildroot}%{_bindir}/innova2_app
 ln -s ../lib/innova2-app/innova2_areg.sh %{buildroot}%{_bindir}/innova2_areg
+ln -s ../lib/innova2-app/innova2_smi.py %{buildroot}%{_bindir}/innova2-smi
 install -d %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_ver} %{buildroot}%{_prefix}/lib/modules-load.d
 install -m 644 innova2_areg_kmod/innova2_areg.c innova2_areg_kmod/Makefile innova2_areg_kmod/dkms.conf \
     %{buildroot}%{_usrsrc}/%{dkms_name}-%{dkms_ver}/
 install -m 644 debian/innova2_areg.conf %{buildroot}%{_prefix}/lib/modules-load.d/innova2_areg.conf
+
+%check
+# innova2-smi unit tests: mock hosts, no hardware
+python3 -m unittest discover -s tests
 
 %post -n innova2-areg-dkms
 dkms remove -m %{dkms_name} -v %{dkms_ver} --all >/dev/null 2>&1 || :
@@ -87,10 +94,11 @@ fi
 
 %files
 %license LICENSE NOTICE LICENSES/Linux-OpenIB.txt
-%doc README.md
+%doc README.md docs/innova2_smi_regmap.md
 %{_prefix}/lib/innova2-app/
 %{_bindir}/innova2_app
 %{_bindir}/innova2_areg
+%{_bindir}/innova2-smi
 %dir %{_localstatedir}/lib/innova2-app
 
 %files -n innova2-areg-dkms
@@ -100,5 +108,7 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Tue Oct 06 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.0-0.1
+- innova2-smi: query and test the Innova-2 XRT shell; untested as an RPM.
 * Sun Oct 04 2026 Michal Kouril <xmkouril@gmail.com> - 1.2.0-0.1
 - Placeholder spec mirroring the Debian packaging; untested.

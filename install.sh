@@ -4,7 +4,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Install innova2_app on a host that has an Innova-2 card.   Run as root from the unpacked folder.
+# Install innova2_app and innova2-smi on a host that has an Innova-2 card.   Run as root from the unpacked folder.
 #
 #   sudo ./install.sh                  copy to /opt/innova2_app, link the commands, DKMS-install the module
 #   sudo ./install.sh --no-kmod        same, without the kernel module (read-only / CR use through MFT only)
@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$(id -u)" = 0 ] || { echo "*** run as root"; exit 1; }
 SRC=$(dirname "$(readlink -f "$0")")
-LINKS="innova2_app innova2_areg"
+LINKS="innova2_app innova2_areg innova2-smi"
 
 if [ $MODE = uninstall ]; then
   for l in $LINKS; do rm -f /usr/local/bin/$l; done
@@ -39,7 +39,8 @@ mkdir -p "$PREFIX"
 ( cd "$SRC" && tar --exclude=.git -cf - . ) | ( cd "$PREFIX" && tar -xf - )
 ln -sf "$PREFIX/innova2_app.py"      /usr/local/bin/innova2_app
 ln -sf "$PREFIX/innova2_areg.sh"     /usr/local/bin/innova2_areg
-echo "installed to $PREFIX; commands: innova2_app, innova2_areg"
+ln -sf "$PREFIX/innova2_smi.py"      /usr/local/bin/innova2-smi
+echo "installed to $PREFIX; commands: innova2_app, innova2_areg, innova2-smi"
 
 command -v mlxreg >/dev/null && echo "MFT mlxreg: $(command -v mlxreg)" \
   || echo "note: MFT (mlxreg) not found -- the 'mlxreg' transport is unavailable; the module path still works"
@@ -54,4 +55,5 @@ if [ $KMOD = 1 ]; then
     "$PREFIX/innova2_areg_kmod/build.sh" install
   fi
 fi
-echo "done. Try:  sudo innova2_app --batch query"
+[ -d /opt/xilinx/xrt ] || echo "note: XRT not found in /opt/xilinx/xrt -- innova2-smi's active tests need it (queries do not)"
+echo "done. Try:  sudo innova2_app --batch query   or   sudo innova2-smi list"

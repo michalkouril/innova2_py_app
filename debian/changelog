@@ -1,3 +1,18 @@
+innova2-app (1.3.0) unstable; urgency=medium
+
+  * New command innova2-smi: query and test the Innova-2 XRT shell (fp8c
+    lineage: E6b, E6b-2400, E7a2, E7a3, E7a3-2666ca48). list, status, check
+    (passive, exit 0/1/2), counters (--watch), recorder, clear, ddr-mode,
+    throttle (including simulate-hot / restore) and test (validate, p2p,
+    ddr-soak, temp-live, ecc-live, throttle, pr-stress, flash-verify).
+  * Cards are found from the ConnectX-5 side and the FPGA state is classified
+    (shell, Flex, missing, other design, unreadable) before any register read.
+  * Every register access goes through the running shell's OBS_ID register map
+    (docs/innova2_smi_regmap.md); an unknown shell is refused.
+  * innova2_app is unchanged.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Tue, 06 Oct 2026 20:00:00 -0400
+
 innova2-app (1.2.0) unstable; urgency=medium
 
   * First Debian packaging: innova2-app (the app) and innova2-areg-dkms

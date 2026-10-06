@@ -2,7 +2,7 @@ Source: innova2-app
 Section: utils
 Priority: optional
 Maintainer: Michal Kouril <xmkouril@gmail.com>
-Build-Depends: debhelper-compat (= 13)
+Build-Depends: debhelper-compat (= 13), python3
 Standards-Version: 4.6.0
 Homepage: https://github.com/michalkouril/innova2_py_app
 Rules-Requires-Root: no
@@ -11,8 +11,8 @@ Package: innova2-app
 Architecture: all
 Depends: python3 (>= 3.8), ${misc:Depends}
 Recommends: innova2-areg-dkms
-Suggests: mstflint
-Description: management app for the Mellanox Innova-2 Flex FPGA card
+Suggests: mstflint, python3-numpy
+Description: management app and shell health tool for the Mellanox Innova-2 Flex card
  innova2_app does what Mellanox's innova2_flex_app 18.07.00 did, with the
  same menus and options: query and select the FPGA image, grant JTAG access,
  read identity, temperature, fan and power, run the DDR and PCI tests, and
@@ -22,6 +22,13 @@ Description: management app for the Mellanox Innova-2 Flex FPGA card
  Image select and the JTAG grant need the innova2-areg-dkms kernel module
  (or the vendor mlx5_fpga_tools module from MLNX_OFED 5.2). Without it, the
  card can still be queried through MFT's mlxreg or mstflint's mstreg.
+ .
+ innova2-smi queries and tests the Innova-2 XRT shell (fp8c lineage): card
+ discovery from the ConnectX-5, shell identity, DDR/ECC, clocks, every
+ temperature source, the thermal throttle, PCIe, PR, P2P and the flight
+ recorder; a passive concerns-only check for cron; and active tests (validate,
+ DDR soak, throttle tier walk, PR stress, flash read-back). Its active tests
+ need XRT (and python3-numpy for the DDR soak).
 
 Package: innova2-areg-dkms
 Architecture: all

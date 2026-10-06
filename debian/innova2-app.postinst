@@ -6,7 +6,7 @@ set -e
 
 if [ "$1" = configure ]; then
     # An earlier install.sh install puts its links in /usr/local/bin, which comes first in PATH.
-    for l in innova2_app innova2_areg; do
+    for l in innova2_app innova2_areg innova2-smi; do
         if [ -L /usr/local/bin/$l ]; then
             echo "note: /usr/local/bin/$l (from install.sh) shadows this package's /usr/bin/$l." >&2
             echo "      Remove the old install with: sudo rm -f /usr/local/bin/$l; sudo rm -rf /opt/innova2_app" >&2

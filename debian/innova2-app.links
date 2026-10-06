@@ -1,2 +1,3 @@
 usr/lib/innova2-app/innova2_app.py usr/bin/innova2_app
 usr/lib/innova2-app/innova2_areg.sh usr/bin/innova2_areg
+usr/lib/innova2-app/innova2_smi.py usr/bin/innova2-smi

@@ -1,4 +1,4 @@
-# Licence audit — innova2_py_app (2026-09-28, revised 2026-10-04)
+# Licence audit — innova2_py_app (2026-09-28, revised 2026-10-06)
 
 Every file in this repository, classified by provenance. Classes and what they mean are at the end.
 
@@ -26,10 +26,13 @@ Every file in this repository, classified by provenance. Classes and what they m
 | `innova2_areg_kmod/innova2_areg.c` | Ours, GPL-2.0 | CopyrightText: 2026 the innova2 contributors; SPDX-License-Identifier: GPL-2.0-only |
 | `install.sh` | Ours | CopyrightText: 2026 the innova2 contributors; SPDX-License-Identifier: Apache-2.0 |
 | `rawspi.py` | Ours | CopyrightText: 2026 the innova2 contributors; SPDX-License-Identifier: Apache-2.0 |
+| `innova2_smi.py`, `innova2_smi_regmap.py`, `innova2_smi_hw.py`, `innova2_smi_check.py`, `innova2_smi_tests.py`, `innova2_smi_xrt.py` | Ours | CopyrightText: 2026 the innova2 contributors; SPDX-License-Identifier: Apache-2.0 (register maps from our own shell RTL, ddr_health.v, Apache-2.0) |
+| `docs/innova2_smi_regmap.md` | Ours (generated) | SPDX comment header: Apache-2.0 |
+| `tests/test_innova2_smi.py` | Ours | CopyrightText: 2026 the innova2 contributors; SPDX-License-Identifier: Apache-2.0 |
 
 ## Classes
 
 * **Licence text** (4 files): Verbatim licence text (SPDX licence list, or our LicenseRef explanation). Not a work of ours to license.
-* **Ours** (8 files, plus `debian/` and `packaging/rpm/`): Written in this project. Apache-2.0, (c) 2026 the innova2 contributors (SPDX header or REUSE.toml).
+* **Ours** (16 files, plus `debian/` and `packaging/rpm/`): Written in this project. Apache-2.0, (c) 2026 the innova2 contributors (SPDX header or REUSE.toml).
 * **Derived from Mellanox (GPL-2.0 / OpenIB BSD)** (2 files): Ours, but register maps / protocol / ioctl numbers transcribed from Mellanox sources that are dual GPL-2.0 or OpenIB BSD. Ship the BSD notice + attribution.
 * **Ours, GPL-2.0** (4 files): Written in this project; GPL-2.0 because it is a Linux kernel module (SPDX tag in file).
