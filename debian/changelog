@@ -1,3 +1,14 @@
+innova2-app (1.3.8) unstable; urgency=medium
+
+  * innova2-smi: route V r3 (OBS_ID 0x0B5E000D, ROM_TS 1792486800 =
+    0x6AD72D90, interface uuid 2ffac711516be3bd9f58f7d3b897803f) = the route-V
+    r2 register map and ddr_health RTL (`regmap --check-rtl` matches the r3
+    ddr_health.v) on the r3 static; boot RM = PRUNED filler; DDR per xclbin,
+    link-default CA drive RDRV_60_60. SHELLS, LAYOUTS (routev, fencewin,
+    not released), THR_DEFAULTS, MIG_BUILDS, DDR_INFO_MAPS.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Wed, 07 Oct 2026 19:45:00 -0400
+
 innova2-app (1.3.7) unstable; urgency=medium
 
   * innova2-smi: fp8c rc1 (OBS_ID 0x0B5E000C, ROM_TS 1792483200 =

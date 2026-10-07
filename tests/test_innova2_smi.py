@@ -48,18 +48,21 @@ _RV2 = [0x218, 0x21c, 0x220]
 RTL_DECODE = {0x0B5E0002: _BASE, 0x0B5E0004: _BASE + _E7 + _MON, 0x0B5E0005: _BASE + _E7,
               0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV,
               0x0B5E000B: _BASE + _E7 + _E7A3 + _RV + _RV2,
-              0x0B5E000C: _BASE + _E7 + _E7A3 + _RV2}      # fp8c rc1: clkx300fp8c_rc1_src ddr_health.v
+              0x0B5E000C: _BASE + _E7 + _E7A3 + _RV2,      # fp8c rc1: clkx300fp8c_rc1_src ddr_health.v
+              0x0B5E000D: _BASE + _E7 + _E7A3 + _RV + _RV2}  # route V r3: clkx300fp8c_routev3_src ddr_health.v (= r2)
 ROM_TS = {0x0B5E0002: 1792371600, 0x0B5E0004: 1792000004, 0x0B5E0005: 1792281600, 0x0B5E0006: 1792458000,
-          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200, 0x0B5E000B: 1792479600, 0x0B5E000C: 1792483200}
+          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200, 0x0B5E000B: 1792479600, 0x0B5E000C: 1792483200,
+          0x0B5E000D: 1792486800}
 RV = 0x0B5E0008
 RV2 = 0x0B5E000B
 RC1 = 0x0B5E000C
+RV3 = 0x0B5E000D
 ROUTEV_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v"
 ROUTEV2_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev2_src/ip_src/ddr_health/ddr_health.v"
 
 
 def vbnv_of(obs_id):
-    return R.VBNV_ROUTEV if obs_id in (RV, RV2) else R.VBNV_FP8C
+    return R.VBNV_ROUTEV if obs_id in (RV, RV2, RV3) else R.VBNV_FP8C
 WRITABLE = {0x30, 0xC0, 0xC4, 0xD8, 0xDC, 0x18C}
 
 
@@ -78,9 +81,9 @@ class Model:
         self.h, self.obs, self.mut = host, obs_id, set(mutants)
         self.decoded = {0x36000 + o for o in RTL_DECODE.get(obs_id, [0x30])} | {0x32000, 0x32008} | \
             set(range(0xA0400, 0xA0800, 4))
-        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV, RV2, RC1)
-        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2, RC1)
-        self.routev = obs_id in (RV, RV2)
+        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV, RV2, RV3, RC1)
+        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2, RV3, RC1)
+        self.routev = obs_id in (RV, RV2, RV3)
         # route V model: the loaded xclbin is KEPT (MIG, poller) or PRUNED (filler); calibrated only when KEPT
         self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0)
         self.code = c2(temp_c)
@@ -638,9 +641,9 @@ class StatusTests(unittest.TestCase):
             names = {x["name"] for x in json.loads(o)}
             self.assertIn("ecc_ce", names)
             self.assertIn("lock_losses_icap", names)
-            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV, RV2, RC1))
-            self.assertEqual("rv_ddr_kept" in names, oid in (RV, RV2))
-            self.assertEqual("fenced_outside_link_down_window" in names, oid in (RV2, RC1))
+            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV, RV2, RV3, RC1))
+            self.assertEqual("rv_ddr_kept" in names, oid in (RV, RV2, RV3))
+            self.assertEqual("fenced_outside_link_down_window" in names, oid in (RV2, RV3, RC1))
             self.assertEqual("axi_p2p_write_slverr" in names, oid == 0x0B5E0004)
             self.assertEqual("pr_count" in names, oid != 0x0B5E0002)
             # every register of the layout is dumped
@@ -2078,6 +2081,48 @@ class Rc1Tests(unittest.TestCase):
             self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(self.check(h), "INFO"), "mutant not caught")
         finally:
             R.has_fencewin = orig
+
+
+ROUTEV3_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev3_src/ip_src/ddr_health/ddr_health.v"
+
+
+class RouteV3Tests(unittest.TestCase):
+    """OBS_ID 0x0B5E000D (route V r3): r2's register map and RTL on a new static; same filler boot RM and fence windows."""
+
+    def test_layout_and_build(self):
+        lay = R.layout(RV3)
+        self.assertTrue(R.is_routev(lay) and R.has_fencewin(lay))
+        self.assertFalse(lay["released"])
+        self.assertEqual(lay["regs"], R.layout(RV2)["regs"])
+        b = R.SHELLS[1792486800]
+        self.assertEqual((b["obs_id"], b["name"], b["boot_rm"]), (RV3, "routeV3", "filler"))
+        self.assertRegex(b["uuid"] or "", "^[0-9a-f]{32}$")
+        self.assertEqual("%x" % 1792486800, "6ad72d90")
+        self.assertIn("RDRV_60_60", R.MIG_BUILDS[1792486800]["ca_drive"])
+        self.assertTrue(R.MIG_BUILDS[1792486800]["per_xclbin"])
+        self.assertEqual(R.THR_DEFAULTS[RV3], R.THR_DEFAULTS[RV2])
+        self.assertIs(R.DDR_INFO_MAPS[RV3], R.DDR_INFO_MAPS[RV2])
+
+    def test_map_against_the_rtl(self):
+        if not os.path.exists(ROUTEV3_RTL):
+            self.skipTest("route-V r3 shell source not on this machine")
+        oid, probs = R.check_rtl(open(ROUTEV3_RTL).read())
+        self.assertEqual((oid, probs), (RV3, []))
+
+    def test_boot_filler(self):
+        t = RouteV2Tests()
+        h = t.boot(RV3)
+        rc, o, e = run_cli(h, ["list"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("no xclbin (boot RM: filler)", o)
+        r = t.check(h)
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+
+    def test_warm_reboot_fence_is_info(self):
+        t = Rc1Tests()
+        h = RouteV2Tests().boot(RV3)
+        t.fences(h, 1, 1, 0)
+        self.assertIn("ddr.fenced_linkdown_benign", t.rules(t.check(h), "INFO"))
 
 
 class FencedLinkDownTests(unittest.TestCase):

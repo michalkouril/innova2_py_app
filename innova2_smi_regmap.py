@@ -29,6 +29,10 @@ ROUTE V r2 (OBS_ID 0x0B5E000B, same VBNV, own ROM_TS): the route-V map plus 0x21
 by link-down window (FENCE_LDWIN + FENCE_OUTWIN = FENCE), so `check` places a warm reboot's fenced write from the
 registers alone. Its flash image boots with the PRUNED filler as the dynamic region (no MIG until a KEPT xclbin loads).
 
+ROUTE V r3 (OBS_ID 0x0B5E000D, same VBNV, ROM_TS 1792486800): register map and ddr_health RTL identical to r2; the ID
+marks the r3 static (RP-side PEER/HOST kernel-clock pipelining, PLRAM controller pblocks, PLRAM2 read latency 4) and its
+link-default CA drive RDRV_60_60 (the template xdc still says RDRV_48_48; the link hook switches it).
+
 FP8C RC1 (OBS_ID 0x0B5E000C, VBNV innova2_innova2_xdma_202320_3, ROM_TS 1792483200): E7a3-2666ca60 (static MIG, DDR4-2666,
 CA RDRV_60_60) plus the same fence-window counters at 0x218..0x220 (the route-V r2 RTL ported to E7a3); no route-V block.
 """
@@ -71,6 +75,9 @@ SHELLS = {
     # route V r2: the flash image boots with the PRUNED filler in the dynamic region (no MIG at power-on)
     1792479600: dict(name="routeV2", obs_id=0x0B5E000B, uuid="af913744c494e27fe46148db9ab1392c", boot_rm="filler",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
+    # route V r3: r2's map and filler boot RM; uuid from the r3 build's release/INTERFACE_UUID (2026-10-07)
+    1792486800: dict(name="routeV3", obs_id=0x0B5E000D, uuid="2ffac711516be3bd9f58f7d3b897803f", boot_rm="filler",
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60 (link default), MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
 }
 
 # ----------------------------------------------------------------------------------------------- management BAR0
@@ -289,6 +296,10 @@ LAYOUTS = {
     0x0B5E000B: dict(name="route V r2 (route-V map + fence-window counters 0x218; boot RM = filler)", e7=True,
                      e7a3=True, mon=False, released=False, routev=True, fencewin=True,
                      regs=_merge(_BASE, _E7, _E7A3, _RV, _RV2)),
+    # route V r3: r2's map and RTL (only the static changed); not yet run on hardware
+    0x0B5E000D: dict(name="route V r3 (route-V r2 map; RP pipelining + PLRAM pblocks; boot RM = filler)", e7=True,
+                     e7a3=True, mon=False, released=False, routev=True, fencewin=True,
+                     regs=_merge(_BASE, _E7, _E7A3, _RV, _RV2)),
 }
 OBS_ID_OFF, OBS_CLEAR = 0x30, 0xC1EAC1EA
 
@@ -304,6 +315,7 @@ THR_DEFAULTS = {
     0x0B5E000C: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0008: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E000B: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E000D: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
 }
 
 
@@ -391,6 +403,9 @@ MIG_BUILDS = {
                      ca_drive="RDRV_48_48 (template ddr_rp_late.xdc)"),
     1792479600: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
                      ca_drive="RDRV_48_48 (template ddr_rp_late.xdc)"),
+    # route V r3: the link hook's default CA drive is RDRV_60_60 (INNOVA2_CA_DRIVE overrides; DDR_INFO says per xclbin)
+    1792486800: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
+                     ca_drive="RDRV_60_60 (link default; template ddr_rp_late.xdc RDRV_48_48)"),
 }
 # Route V's planned DDR_INFO block (MIG constants + a ui_clk counter, from the template) replaces the table and the poll
 # estimate when its OBS_ID layout lists it: {obs_id: {"regs": {offset: (name, decoder)}}}. Empty until that map exists.
@@ -408,6 +423,7 @@ DDR_INFO_MAPS = {
     }),
 }
 DDR_INFO_MAPS[0x0B5E000B] = DDR_INFO_MAPS[0x0B5E0008]          # route V r2: the same DDR_INFO block
+DDR_INFO_MAPS[0x0B5E000D] = DDR_INFO_MAPS[0x0B5E0008]          # route V r3: the same DDR_INFO block
 
 
 def mig_rates(tck_ps, phy_ratio=4):
@@ -709,7 +725,7 @@ def markdown():
         who = "all" if len(oids) == len(LAYOUTS) else ", ".join("%X" % (x & 0xF) for x in sorted(oids))
         L.append("| 0x%03X | %s | %s | %s | %s |" % (o, name, acc, who, desc.replace("|", "/")))
     L += ["", "Layout column: the last hex digit of the OBS_IDs that decode the offset (1 = full, 2 = E4 layout, "
-          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V, B = route V r2).", "",
+          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V, B = route V r2, D = route V r3).", "",
           "Route V (OBS_ID 0x0B5E0008, VBNV %s): the DDR4 MIG lives in the dynamic region; an xclbin either has "
           "it (KEPT: its kernels use bank0) or not (PRUNED). 0x00-0x198 keep the E7a3 meaning; 0x14-0x2C stay "
           "cumulative since configuration (the in-RP ECC poller sends deltas over the RP boundary) and 0x1D0-0x1E8 "
@@ -723,6 +739,9 @@ def markdown():
           "(after a link-down) the static waits for recalibration and less than 2 s have passed since link-up; it "
           "closes at RECAL_DONE or at the limit. FENCE_LDWIN + FENCE_OUTWIN = FENCE (0xA0). The r2 flash image boots "
           "with the PRUNED filler in the dynamic region, so RV_INFO/DDR_INFO read 'no DDR' until a KEPT xclbin loads.",
+          "",
+          "Route V r3 (OBS_ID 0x0B5E000D, same VBNV): the r2 map and ddr_health RTL unchanged; the ID marks the r3 "
+          "static (RP-side PEER/HOST pipelining, PLRAM pblocks) and its link-default CA drive RDRV_60_60.",
           "",
           "PR_COUNT (0x120) counts RP ISOLATIONS: XRT isolates the RP twice per `xbutil program` (a zero-length "
           "isolate first, then the reconfiguration), so it rises by 2 per xclbin load. Route V's RV_LOADS (0x1C4) "
