@@ -39,7 +39,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.6"
+VERSION = "1.3.7"
 
 
 def _version():
@@ -321,7 +321,7 @@ def render_status(st):
         if e[k]:
             L.append("  %s       : %s" % (k.replace("_", " "), R.ffa_str(e[k])))
     ld, fe = d["link_down"], d["fenced"]
-    fw = (rv or {}).get("fence_windows")
+    fw = d.get("fence_windows") or (rv or {}).get("fence_windows")
     L.append("link-down      : %d%s; fenced DDR accesses %d%s%s" % (
         ld["count"], ", recalibrated after the last" if ld["recalibrated"] else "", fe["count"],
         (" (first: %s at 0x%x)" % ("read" if fe["first"]["read"] else "write", fe["first"]["addr"])) if fe["first"] else "",
@@ -1032,7 +1032,8 @@ def build_parser():
     q.add_argument("--recorder", action="store_true",
                    help="when DDR accesses were fenced, read the flight recorder (stores to its index register; no "
                         "longer strictly passive) to place every fence in a link-down window. Not needed on route V "
-                        "r2 (OBS_ID 0x0B5E000B): its FENCE_LDWIN / FENCE_OUTWIN counters place them from registers")
+                        "r2 (OBS_ID 0x0B5E000B) or fp8c rc1 (0x0B5E000C): their FENCE_LDWIN / FENCE_OUTWIN counters "
+                        "place them from registers")
     q = add("ecc-baseline", cmd_ecc_baseline, "record ECC counts now; 'check' then judges only new errors")
     g = q.add_mutually_exclusive_group()
     g.add_argument("--show", action="store_true", help="print the stored baseline")

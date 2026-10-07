@@ -103,7 +103,8 @@ RULES = {
                                             "fence BEFORE the last of several link-downs (hpy440: two link-downs "
                                             "per warm reboot, the fence in the first) needs 'check --recorder': "
                                             "every FENCE record must then lie in a LINK_DOWN..RECAL_DONE window. "
-                                            "Route V r2 (OBS_ID 0x0B5E000B) counts it in hardware: benign when "
+                                            "Route V r2 (OBS_ID 0x0B5E000B) and fp8c rc1 (0x0B5E000C) count it in "
+                                            "hardware: benign when "
                                             "FENCE_OUTWIN (0x21C) = 0 and FENCE_LDWIN (0x218) = FENCE, from "
                                             "registers alone, KEPT or PRUNED"),
     "ddr.recorder_unreadable": dict(sev="WARN", hint="check --recorder could not read the flight recorder; the "
@@ -559,7 +560,7 @@ def fence_items(sh, regs, recorder=None):
     elif addr != rule["address"]:
         why.append("address 0x%x, not 0x%x" % (addr, rule["address"]))
     if R.has_fencewin(sh.lay):
-        # fence-window counters (route V r2 RTL, ported to E7a3 as 0x0B5E000C): the shell placed every fence itself
+        # fence-window counters (route V r2 RTL, ported to E7a3: fp8c rc1, 0x0B5E000C): the shell placed every fence itself
         fin, fout = rd(0x218), rd(0x21C)
         ev.update(inside_link_down_windows=fin, outside_link_down_windows=fout,
                   timing="registers: FENCE_LDWIN / FENCE_OUTWIN (no recorder needed)")

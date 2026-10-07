@@ -28,6 +28,9 @@ the static MIG's ECC master (nothing the tool reads; build gate AMAP), and ddr_h
 ROUTE V r2 (OBS_ID 0x0B5E000B, same VBNV, own ROM_TS): the route-V map plus 0x218..0x220 -- fenced DDR accesses split
 by link-down window (FENCE_LDWIN + FENCE_OUTWIN = FENCE), so `check` places a warm reboot's fenced write from the
 registers alone. Its flash image boots with the PRUNED filler as the dynamic region (no MIG until a KEPT xclbin loads).
+
+FP8C RC1 (OBS_ID 0x0B5E000C, VBNV innova2_innova2_xdma_202320_3, ROM_TS 1792483200): E7a3-2666ca60 (static MIG, DDR4-2666,
+CA RDRV_60_60) plus the same fence-window counters at 0x218..0x220 (the route-V r2 RTL ported to E7a3); no route-V block.
 """
 
 import math
@@ -60,6 +63,8 @@ SHELLS = {
     1792468800: dict(name="E7a3-2400ca48", obs_id=0x0B5E0009, uuid="8b85b528d4b122cd232eb5ff8787ddce",
                      ddr="DDR4-2400 72-bit ECC (dw8_833), CA RDRV_48_48"),
     1792472400: dict(name="E7a3-2666ca60", obs_id=0x0B5E000A, uuid="3f6b9d2219f59bb33a37cf39bf4a06d3",
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
+    1792483200: dict(name="fp8c-rc1", obs_id=0x0B5E000C, uuid="be1cab316e1fce901b02ed3d5d6c6191",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
     1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid="5027516c91a681bd01afaf11083d9d60", boot_rm="KEPT template",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
@@ -200,7 +205,7 @@ _RV = {
     0x210: ("UI_CLK_EDGES", "r", "MIG ui_clk/2^SHIFT rising edges in the last 2^WIN aclk window (0 = no valid window)"),
     0x214: ("UI_CLK_CFG", "r", "[7:0] WIN (log2 aclk cycles) [15:8] SHIFT [16] the last window was valid"),
 }
-# route V r2 (OBS_ID 0x0B5E000B): fenced DDR accesses split by LINK-DOWN WINDOW. A window is open while the link is
+# route V r2 (OBS_ID 0x0B5E000B) and fp8c rc1 (0x0B5E000C): fenced DDR accesses split by LINK-DOWN WINDOW. A window is open while the link is
 # down, while the link-down MIG reset is active, or -- after a link-down -- while the static waits for recalibration
 # and less than 2 s have passed since the link came back (it ends at RECAL_DONE or at that limit). Every fenced access
 # goes to exactly one of the two counters: FENCE_LDWIN + FENCE_OUTWIN = FENCE (0xA0). CLEAR zeroes all three.
@@ -274,6 +279,9 @@ LAYOUTS = {
                      regs=_merge(_BASE, _E7, _E7A3)),
     0x0B5E000A: dict(name="E7a3-2666ca60 (E7a3 register map)", e7=True, e7a3=True, mon=False, released=True,
                      regs=_merge(_BASE, _E7, _E7A3)),
+    # fp8c rc1: E7a3-2666ca60 + the fence-window counters (route V r2 RTL ported to E7a3)
+    0x0B5E000C: dict(name="fp8c rc1 (E7a3 map + fence-window counters 0x218)", e7=True, e7a3=True, mon=False,
+                     released=True, fencewin=True, regs=_merge(_BASE, _E7, _E7A3, _RV2)),
     # route V: not yet run on hardware (released=False until the owner's first-hardware session)
     0x0B5E0008: dict(name="route V (E7a3 map + DDR-in-RP block 0x1C0; DDR per xclbin)", e7=True, e7a3=True, mon=False,
                      released=True, routev=True, regs=_merge(_BASE, _E7, _E7A3, _RV)),
@@ -293,6 +301,7 @@ THR_DEFAULTS = {
     0x0B5E0007: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0009: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E000A: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E000C: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0008: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E000B: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
 }
@@ -375,6 +384,7 @@ MIG_BUILDS = {
     1792461600: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_48_48 (ca_drive.tcl, routed gate passed)"),
     1792468800: dict(_MIG_2400_DW8, variant="dw8_833", ca_drive="RDRV_48_48 (ca_drive.tcl, routed gate passed)"),
     1792472400: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
+    1792483200: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
     # route V: the MIG is in each KEPT xclbin; these are the template's (MIG_VARIANT e6b750, CA_DRIVE RDRV_48_48, the
     # in-RP ddr_ecc_poller's POLL_CYC 333000). An xclbin built from another template differs: DDR_INFO will say.
     1792465200: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,

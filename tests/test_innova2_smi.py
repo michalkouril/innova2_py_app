@@ -47,11 +47,13 @@ _RV = list(range(0x1c0, 0x1fc, 4)) + list(range(0x200, 0x218, 4))
 _RV2 = [0x218, 0x21c, 0x220]
 RTL_DECODE = {0x0B5E0002: _BASE, 0x0B5E0004: _BASE + _E7 + _MON, 0x0B5E0005: _BASE + _E7,
               0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV,
-              0x0B5E000B: _BASE + _E7 + _E7A3 + _RV + _RV2}
+              0x0B5E000B: _BASE + _E7 + _E7A3 + _RV + _RV2,
+              0x0B5E000C: _BASE + _E7 + _E7A3 + _RV2}      # fp8c rc1: clkx300fp8c_rc1_src ddr_health.v
 ROM_TS = {0x0B5E0002: 1792371600, 0x0B5E0004: 1792000004, 0x0B5E0005: 1792281600, 0x0B5E0006: 1792458000,
-          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200, 0x0B5E000B: 1792479600}
+          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200, 0x0B5E000B: 1792479600, 0x0B5E000C: 1792483200}
 RV = 0x0B5E0008
 RV2 = 0x0B5E000B
+RC1 = 0x0B5E000C
 ROUTEV_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v"
 ROUTEV2_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev2_src/ip_src/ddr_health/ddr_health.v"
 
@@ -76,8 +78,8 @@ class Model:
         self.h, self.obs, self.mut = host, obs_id, set(mutants)
         self.decoded = {0x36000 + o for o in RTL_DECODE.get(obs_id, [0x30])} | {0x32000, 0x32008} | \
             set(range(0xA0400, 0xA0800, 4))
-        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV, RV2)
-        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2)
+        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV, RV2, RC1)
+        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2, RC1)
         self.routev = obs_id in (RV, RV2)
         # route V model: the loaded xclbin is KEPT (MIG, poller) or PRUNED (filler); calibrated only when KEPT
         self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0)
@@ -636,9 +638,9 @@ class StatusTests(unittest.TestCase):
             names = {x["name"] for x in json.loads(o)}
             self.assertIn("ecc_ce", names)
             self.assertIn("lock_losses_icap", names)
-            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV, RV2))
+            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV, RV2, RC1))
             self.assertEqual("rv_ddr_kept" in names, oid in (RV, RV2))
-            self.assertEqual("fenced_outside_link_down_window" in names, oid == RV2)
+            self.assertEqual("fenced_outside_link_down_window" in names, oid in (RV2, RC1))
             self.assertEqual("axi_p2p_write_slverr" in names, oid == 0x0B5E0004)
             self.assertEqual("pr_count" in names, oid != 0x0B5E0002)
             # every register of the layout is dumped
@@ -1586,7 +1588,7 @@ class RouteV2Tests(unittest.TestCase):
 
     def test_e7a3_port_layout_uses_counters(self):
         class Sh:
-            lay = dict(R.layout(0x0B5E0007), fencewin=True)  # the E7a3 fence-window port (OBS_ID not yet assigned)
+            lay = R.layout(RC1)                              # the E7a3 fence-window port: fp8c rc1
         regs = {0xA0: 1, 0x10: 2, 0xA4: 1 << 31, 0xA8: 0, 0xAC: 2, 0x218: 1, 0x21C: 0}
         self.assertEqual(C.fence_items(Sh, regs)[0]["rule"], "ddr.fenced_linkdown_benign")
         regs.update({0xA0: 2, 0x21C: 1})
@@ -1996,6 +1998,86 @@ def fence_failures(fence=None):
     finally:
         C.fence_items = saved
     return bad
+
+
+RC1_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_rc1_src/ip_src/ddr_health/ddr_health.v"
+
+
+class Rc1Tests(unittest.TestCase):
+    """OBS_ID 0x0B5E000C (fp8c rc1 = E7a3-2666ca60 + the fence-window counters): a static-MIG E7a3 shell (no route-V
+    block) whose warm-reboot fence is placed by FENCE_LDWIN / FENCE_OUTWIN, with a plain `check` (no --recorder)."""
+
+    def check(self, h):
+        return C.run_check(h, H.discover(h)[0], interval=1.0)
+
+    def rules(self, r, sev=None):
+        return [i["rule"] for i in r["items"] if sev is None or i["severity"] == sev]
+
+    def fences(self, h, total, inside, outside, first_ts_before_last_ld=False):
+        h.model.r[0xA0], h.model.r[0x218], h.model.r[0x21C] = total, inside, outside
+        h.model.r[0xA4], h.model.r[0xA8], h.model.r[0xAC] = 1 << 31, 0, 2      # first: a write at 0x200000000
+        h.model.r[0x10] = 2                                  # hpy440: two link-downs per warm reboot
+        if first_ts_before_last_ld:                          # the fence in the FIRST link-down: timestamps cannot place it
+            h.model.r[0xE0], h.model.r[0xF0] = 5000, 4000
+
+    def test_layout_and_build(self):
+        lay = R.layout(RC1)
+        self.assertTrue(R.has_fencewin(lay) and lay["e7a3"] and lay["released"])
+        self.assertFalse(R.is_routev(lay))
+        self.assertTrue({0x218, 0x21C, 0x220} <= set(lay["regs"]))
+        self.assertFalse(any(0x1C0 <= o < 0x218 for o in lay["regs"]), "rc1 has no route-V block")
+        b = R.SHELLS[1792483200]
+        self.assertEqual((b["obs_id"], b["name"]), (RC1, "fp8c-rc1"))
+        self.assertRegex(b["uuid"] or "", "^[0-9a-f]{32}$")
+        self.assertEqual("%x" % 1792483200, "6ad71f80")
+        self.assertIn("RDRV_60_60", R.MIG_BUILDS[1792483200]["ca_drive"])
+        self.assertEqual(R.THR_DEFAULTS[RC1], R.THR_DEFAULTS[0x0B5E000A])
+
+    def test_map_against_the_rtl(self):
+        if not os.path.exists(RC1_RTL):
+            self.skipTest("rc1 shell source not on this machine")
+        oid, probs = R.check_rtl(open(RC1_RTL).read())
+        self.assertEqual((oid, probs), (RC1, []))
+
+    def test_warm_reboot_fence_is_info_without_recorder(self):
+        h = MockHost(RC1)
+        self.fences(h, 1, 1, 0, first_ts_before_last_ld=True)
+        r = self.check(h)
+        self.assertIn("ddr.fenced_linkdown_benign", self.rules(r, "INFO"))
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        it = [i for i in r["items"] if i["rule"] == "ddr.fenced_linkdown_benign"][0]
+        self.assertIn("registers", it["evidence"]["timing"])
+        self.assertEqual((it["evidence"]["inside_link_down_windows"], it["evidence"]["outside_link_down_windows"]), (1, 0))
+        self.assertEqual(h.model.writes, [], "classification must not store to the recorder index")
+        self.assertEqual(run_cli(h, ["check"])[0], 0)
+
+    def test_fence_outside_window_is_not_benign(self):
+        h = MockHost(RC1)
+        self.fences(h, 2, 1, 1)
+        r = self.check(h)
+        self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(r))
+        it = [i for i in r["items"] if i["rule"] == "ddr.fenced"][0]
+        self.assertIn("outside every link-down window", it["evidence"]["not_benign"])
+
+    def test_status_shows_the_counters(self):
+        h = MockHost(RC1)
+        self.fences(h, 1, 1, 0)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("fenced DDR accesses 1 (first: write at 0x200000000); 1 inside link-down windows, 0 outside", o)
+        fw = json.loads(run_cli(h, ["status", "--json"])[1])["ddr"]["fence_windows"]
+        self.assertEqual((fw["inside"], fw["outside"], fw["total"]), (1, 0, 1))
+        self.assertIsNone(json.loads(run_cli(MockHost(0x0B5E0007), ["status", "--json"])[1])["ddr"]["fence_windows"])
+
+    def test_mutant_counters_ignored_is_caught(self):
+        orig = R.has_fencewin
+        try:
+            R.has_fencewin = lambda lay: bool(lay and lay.get("routev"))   # mutant: only route V reads the counters
+            h = MockHost(RC1)
+            self.fences(h, 1, 1, 0, first_ts_before_last_ld=True)
+            self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(self.check(h), "INFO"), "mutant not caught")
+        finally:
+            R.has_fencewin = orig
 
 
 class FencedLinkDownTests(unittest.TestCase):

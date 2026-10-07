@@ -631,11 +631,7 @@ def routev(sh):
         out["ecc_this_load"][name] = R.decode_ffa((h & 0x7FFFFFFF) << 32 | sh.r(lo)) if h >> 31 & 1 else None
     out.update(rm_state(sh, bool(i & 1)))
     if R.has_fencewin(sh.lay):
-        w = sh.r(0x220)
-        out["fence_windows"] = dict(inside=sh.r(0x218), outside=sh.r(0x21C), total=sh.r(0xA0), open_now=bool(w & 1),
-                                    link_down_now=bool(w >> 1 & 1), mig_reset_active=bool(w >> 2 & 1),
-                                    waiting_recal=bool(w >> 3 & 1), limit_run_out=bool(w >> 4 & 1),
-                                    limit_s=round((w >> 16) * 65536 / R.ACLK_HZ, 3), raw="0x%08x" % w)
+        out["fence_windows"] = fence_windows(sh)
     return out
 
 
@@ -767,7 +763,18 @@ def health(sh):
         locks=[dict(name=n, locked=bool(lk >> i & 1), lost=bool(lk >> (8 + i) & 1), ever=bool(lk >> (16 + i) & 1),
                     losses=cnts[i]) for i, n in enumerate(R.LOCK_NAMES)],
         fenced=dict(count=sh.r(0xA0), first=(dict(read=bool(fi >> 30 & 1), addr=sh.r(0xAC) << 32 | sh.r(0xA8))
-                                             if fi >> 31 & 1 else None)))
+                                             if fi >> 31 & 1 else None)),
+        fence_windows=fence_windows(sh))
+
+
+def fence_windows(sh):
+    """FENCE_LDWIN / FENCE_OUTWIN / FENCE_WIN (0x218..0x220) on layouts that have them (route V r2, fp8c rc1); else None."""
+    if not R.has_fencewin(sh.lay):
+        return None
+    w = sh.r(0x220)
+    return dict(inside=sh.r(0x218), outside=sh.r(0x21C), total=sh.r(0xA0), open_now=bool(w & 1),
+                link_down_now=bool(w >> 1 & 1), mig_reset_active=bool(w >> 2 & 1), waiting_recal=bool(w >> 3 & 1),
+                limit_run_out=bool(w >> 4 & 1), limit_s=round((w >> 16) * 65536 / R.ACLK_HZ, 3), raw="0x%08x" % w)
 
 
 def throttle(sh):
