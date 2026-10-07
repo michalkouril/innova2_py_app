@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version:        1.3.2
+Version: 1.3.3
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only

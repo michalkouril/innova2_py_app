@@ -1282,6 +1282,19 @@ class MemoryTests(unittest.TestCase):
         self.assertEqual(r["severity"], "FAIL")
         self.assertIn("mem.bank_not_ready", C.render(r))
 
+    def test_emu_mode_bank_ready(self):
+        # EMU: gate closed and MIG held by design, DDR served by the 1 MB URAM emulation -> not a bank_not_ready FAIL
+        h = MockHost(0x0B5E0007)
+        load_xclbin(h, [1, 0, 0, 0, 0, 0], [(0, 0, 0)])
+        h.model.r[0x00] = (h.model.r[0x00] & ~(1 << 28) & ~(3 << 29)) | (2 << 29) | (1 << 31)
+        b = self.banks(h)["bank0"]
+        self.assertTrue(b["ready"])
+        self.assertIn("EMULATED", b["state"])
+        self.assertNotIn("mem.bank_not_ready", self.rules(self.check(h)))
+        # mutant: EMU with XRT calibration bit 0 must still FAIL
+        h.model.memcalib = 0
+        self.assertIn("mem.bank_not_ready", self.rules(self.check(h)))
+
     def test_routev_pruned_ddr(self):
         h = MockHost(RV)
         h.model.set_pruned()

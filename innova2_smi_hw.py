@@ -1051,8 +1051,18 @@ def mem_context(host, card, sh=None, regs=None, memcalib=None):
                                         % (info, info & 1, info >> 1 & 1, info >> 4 & 1))
         else:
             gate = status >> 28 & 1
-            ctx.update(ddr_ready=bool(gate and mc & 1),
-                       ddr_ready_source="ddr_health gate %s, XRT calibration bit %d" % ("open" if gate else "CLOSED", mc & 1))
+            mode = R.MODE_NAMES[status >> 29 & 3]
+            ctx["ddr_mode"] = mode
+            if mode in ("emu", "hybrid"):
+                # EMU/HYBRID: the gate is closed and the MIG held BY DESIGN; DDR traffic is served from the 1 MB URAM
+                # emulation, and the gate reports calibration to XRT. Ready = XRT's calibration bit.
+                ctx.update(ddr_ready=bool(mc & 1),
+                           ddr_ready_source="DDR mode %s in force (1 MB URAM emulation, gate closed by design), XRT "
+                                            "calibration bit %d" % (mode, mc & 1))
+            else:
+                ctx.update(ddr_ready=bool(gate and mc & 1),
+                           ddr_ready_source="ddr_health gate %s, XRT calibration bit %d" % ("open" if gate else "CLOSED",
+                                                                                           mc & 1))
             if sh.lay["e7"]:
                 ctx["rp_released"] = bool(rd(0x128) & 1)
     elif mgmt and host.driver(mgmt) == "xclmgmt":
@@ -1092,6 +1102,10 @@ def _bank_state(b, ctx):
         return None, "unused", None, "used=0 in the xclbin's mem_topology"
     if k == "DDR":
         r = ctx.get("ddr_ready")
+        if ctx.get("ddr_mode") in ("emu", "hybrid"):
+            return r, "in use, %s" % ("EMULATED (DDR mode %s: only the first 1 MB is backed, by URAM)" % ctx["ddr_mode"]
+                                      if r else "NOT READY (DDR mode %s, XRT calibration bit 0)" % ctx["ddr_mode"]), \
+                False, ctx["ddr_ready_source"]
         return r, "in use, %s" % {True: "calibrated", False: "NOT CALIBRATED", None: "calibration unknown"}[r], False, \
             ctx.get("ddr_ready_source") or "no calibration source"
     if k == "PLRAM":
