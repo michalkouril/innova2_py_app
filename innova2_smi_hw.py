@@ -464,7 +464,7 @@ class Shell:
             self.state = "OUR_SHELL_OLD"
             self._step("platform", False, "pre-fp8c shell %s: no ddr_health map; identity only" % self.vbnv)
             return self
-        if not self._step("platform", self.vbnv == R.VBNV_FP8C, "VBNV %s" % self.vbnv):
+        if not self._step("platform", self.vbnv in R.VBNVS, "VBNV %s" % self.vbnv):
             return self
         self.io = h.regio(self.mgmt, 0, R.MGMT_REGIONS, self.guard)
         self.guard.allow(reads=[R.STATUS + R.OBS_ID_OFF])
@@ -482,6 +482,9 @@ class Shell:
                                                                               known["obs_id"], oid))
         if not known:
             self.name = "unlisted build (ROM_TS %d), %s layout" % (self.rom_ts, lay["name"])
+        if R.is_routev(lay) != (self.vbnv == R.VBNV_ROUTEV):
+            self.warnings.append("VBNV %s with OBS_ID 0x%08X (%s): the platform and the shell's register layout "
+                                 "disagree -- using the register map of the OBS_ID" % (self.vbnv, oid, lay["name"]))
         self.guard.allow(reads=R.read_set(oid), writes=R.write_set(oid))
         if not self._step("status register", self.io.rd(R.STATUS) != 0xFFFFFFFF, "mgmt_status reads all-ones"):
             return self
@@ -518,9 +521,35 @@ class Shell:
 # ----------------------------------------------------------------------------------------------- collectors
 def ddr_state(sh):
     s, c, m = sh.io.rd(R.STATUS), sh.io.rd(R.MEMCALIB), sh.io.rd(R.MODE_REG)
-    return dict(requested=R.MODE_NAMES[m & 3], in_force=R.MODE_NAMES[s >> 29 & 3], mig_held=bool(s >> 31 & 1),
-                gate_open=bool(s >> 28 & 1), fenced_seen=bool(s >> 27 & 1), xrt_calibration_bit=c & 1,
-                raw_status="0x%08x" % s)
+    d = dict(requested=R.MODE_NAMES[m & 3], in_force=R.MODE_NAMES[s >> 29 & 3], mig_held=bool(s >> 31 & 1),
+             gate_open=bool(s >> 28 & 1), fenced_seen=bool(s >> 27 & 1), xrt_calibration_bit=c & 1,
+             raw_status="0x%08x" % s)
+    if sh.lay and R.is_routev(sh.lay):
+        rv = sh.r(0x1C0)
+        d["xclbin_ddr"] = "KEPT" if rv & 1 else "PRUNED"       # route V: does the loaded xclbin have DDR?
+    return d
+
+
+def routev(sh):
+    """Route V (OBS_ID 0x0B5E0008): the DDR state of the loaded xclbin -- KEPT (MIG in the dynamic region) or PRUNED
+    (no DDR) -- calibration, load / calibration counts, per-load ECC, fences while KEPT. None on other shells."""
+    if not (sh.lay and R.is_routev(sh.lay)):
+        return None
+    i, ld, cal = sh.r(0x1C0), sh.r(0x1C4), sh.r(0x1C8)
+    uel = sh.r(0x1D4)
+    out = dict(signature_ok=(i >> 16) == R.RV_SIGNATURE, xclbin_ddr="KEPT" if i & 1 else "PRUNED",
+               ddr_present=bool(i & 1), calibrated=bool(i >> 1 & 1), rp_calib=bool(i >> 2 & 1),
+               ecc_poller=bool(i >> 3 & 1), rp_released=bool(i >> 4 & 1), gate_open=bool(i >> 5 & 1),
+               ecc_accepting=bool(i >> 6 & 1), loads_kept=ld & 0xFFFF, loads_pruned=ld >> 16,
+               calibrations=cal & 0xFFFF, calibrations_lost=cal >> 16,
+               last_calibration_ms=round(sh.r(0x1CC) / R.ACLK_HZ * 1e3, 3),
+               ecc_this_load=dict(ce=sh.r(0x1D0), ue_polls=uel & 0xFFFF, polled=bool(uel >> 29 & 1),
+                                  ue_seen=bool(uel >> 31 & 1), polls=sh.r(0x1D8)),
+               fenced_while_kept=sh.r(0x1EC), raw_info="0x%08x" % i)
+    for name, lo, hi in (("first_ce", 0x1DC, 0x1E0), ("first_ue", 0x1E4, 0x1E8)):
+        h = sh.r(hi)
+        out["ecc_this_load"][name] = R.decode_ffa((h & 0x7FFFFFFF) << 32 | sh.r(lo)) if h >> 31 & 1 else None
+    return out
 
 
 def uptime(sh):
@@ -1015,6 +1044,9 @@ def restore_thr(sh, saved):
 def set_ddr_mode(sh, want, timeout=5.0):
     """Ported from innova2_ddr_mode: write the mode register, wait for the mode to take effect; restore a v1.2
     gate's previous mode when 'hybrid' maps to OFF there."""
+    if sh.lay and R.is_routev(sh.lay) and R.MODE_NAMES[want] in R.ROUTEV_DEFERRED_MODES:
+        raise Refused("DDR mode '%s' is not available on route V (deferred): the DDR is built into each xclbin in the "
+                      "dynamic region and the static gate runs on/off only; nothing was written" % R.MODE_NAMES[want])
     prev = sh.io.rd(R.MODE_REG) & 3
     sh.io.wr(R.MODE_REG, want)
     if (sh.io.rd(R.MODE_REG) & 3) != want:

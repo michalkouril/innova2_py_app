@@ -19,6 +19,11 @@ further register access ("fail closed").
 All fp8c builds share ONE management address map (measured: amap_this_build.txt is identical for e6b, e6b2400dw8,
 e7a2, e7a3_2400 and e7a3_2666ca48), so the regions below are the same for every supported layout; what differs per
 OBS_ID is which ddr_health offsets exist.
+
+ROUTE V (OBS_ID 0x0B5E0008, VBNV innova2_innova2_noddr_202320_3): the DDR4 MIG is in the dynamic region, built into
+an xclbin only when its kernels use DDR (KEPT) and pruned otherwise (PRUNED). Its management map is the E7a3 one minus
+the static MIG's ECC master (nothing the tool reads; build gate AMAP), and ddr_health adds a block at 0x1C0..0x1F8
+(KEPT/PRUNED, calibration, per-load ECC, fences while KEPT). EMU/HYBRID are deferred on it (the gate runs on/off).
 """
 
 import math
@@ -26,6 +31,8 @@ import math
 # ----------------------------------------------------------------------------------------------- platform identity
 VBNV_FP8C = "innova2_innova2_xdma_202320_3"       # fp8c and later (PLATFORM_VENDOR innova2)
 VBNV_OLD = "xilinx_innova2_xdma_202320_3"          # pre-fp8c production shells (inn2x r3..r7): identity only
+VBNV_ROUTEV = "innova2_innova2_noddr_202320_3"     # route V: DDR4 MIG in the dynamic region (per xclbin)
+VBNVS = (VBNV_FP8C, VBNV_ROUTEV)                   # platforms whose ddr_health map this tool reads
 FPGA_VENDOR, FPGA_MGMT_DEV, FPGA_USER_DEV = "0x10ee", "0x788f", "0x6a90"
 CX5_VENDOR, BOPE_DEV = "0x15b3", "0x0264"
 
@@ -41,6 +48,8 @@ SHELLS = {
     1792458000: dict(name="E7a3-2400", obs_id=0x0B5E0006, uuid="5970d74a63e26d3fe4041d0b50f5319f",
                      ddr="DDR4-2400 72-bit ECC (dw8_833)"),
     1792461600: dict(name="E7a3-2666ca48", obs_id=0x0B5E0007, uuid=None, ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48"),
+    1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid=None,
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
 }
 
 # ----------------------------------------------------------------------------------------------- management BAR0
@@ -144,6 +153,31 @@ _E7A3 = {
 }
 
 
+# route V (OBS_ID 0x0B5E0008): the DDR-in-the-dynamic-region block. Everything at 0x00-0x198 keeps its E7a3 meaning;
+# 0x14-0x2C stay cumulative since configuration (the in-RP poller's deltas cross the RP boundary), 0x1D0-0x1E8 are the
+# same ECC values for the CURRENT load only (reset when the RP is isolated for a load).
+_RV = {
+    0x1C0: ("RV_INFO", "r", "[0] DDR in the loaded xclbin (KEPT; 0 = PRUNED) [1] calibrated (RM ddr_ready AND RP "
+                            "released) [2] rp_calib (filler: 1) [3] ECC poller present [4] RP released [5] DDR window "
+                            "gate open [6] ECC snapshots accepted [31:16] 0x5256"),
+    0x1C4: ("RV_LOADS", "r", "[15:0] KEPT loads [31:16] PRUNED loads, counted 262 us after each RP release (sat)"),
+    0x1C8: ("RV_CAL", "r", "[15:0] calibrations completed [31:16] calibrations LOST while a KEPT xclbin was loaded (sat)"),
+    0x1CC: ("RV_CALTIME", "r", "aclk cycles from the last RP release to its calibration (0 = none yet)"),
+    0x1D0: ("ECC_CE_LOAD", "r", "corrected errors since the last xclbin load (per load)"),
+    0x1D4: ("ECC_UE_LOAD", "r", "[15:0] UE polls since the last load [29] polled since the load [31] UE seen since the load"),
+    0x1D8: ("ECC_POLLS_LOAD", "r", "ECC polls since the last load"),
+    0x1DC: ("CE_FFA_LOAD_LO", "r", "first corrected-error address of this load, low word"),
+    0x1E0: ("CE_FFA_LOAD_HI", "r", "first corrected-error address of this load, high word; [31] valid"),
+    0x1E4: ("UE_FFA_LOAD_LO", "r", "first uncorrectable-error address of this load, low word"),
+    0x1E8: ("UE_FFA_LOAD_HI", "r", "first uncorrectable-error address of this load, high word; [31] valid"),
+    0x1EC: ("FENCE_KEPT", "r", "fenced DDR accesses while a KEPT xclbin was loaded and released (sat)"),
+    0x1F0: ("TS_CAL", "r", "timestamp of the last calibration completed"),
+    0x1F4: ("TS_FENCE_KEPT", "r", "timestamp of the last fence while KEPT"),
+    0x1F8: ("TS_LOAD", "r", "timestamp of the last load settle (KEPT/PRUNED counted)"),
+}
+RV_SIGNATURE = 0x5256
+
+
 def _merge(*maps):
     out = {}
     for m in maps:
@@ -183,6 +217,9 @@ LAYOUTS = {
     0x0B5E0006: dict(name="E7a3", e7=True, e7a3=True, mon=False, released=True, regs=_merge(_BASE, _E7, _E7A3)),
     0x0B5E0007: dict(name="E7a3-2666ca48 (E7a3 register map)", e7=True, e7a3=True, mon=False, released=True,
                      regs=_merge(_BASE, _E7, _E7A3)),
+    # route V: not yet run on hardware (released=False until the owner's first-hardware session)
+    0x0B5E0008: dict(name="route V (E7a3 map + DDR-in-RP block 0x1C0; DDR per xclbin)", e7=True, e7a3=True, mon=False,
+                     released=False, routev=True, regs=_merge(_BASE, _E7, _E7A3, _RV)),
 }
 OBS_ID_OFF, OBS_CLEAR = 0x30, 0xC1EAC1EA
 
@@ -193,11 +230,16 @@ THR_DEFAULTS = {
     0x0B5E0005: {0xC0: 0x00000031, 0xC4: 0x02D402E9},
     0x0B5E0006: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0007: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E0008: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
 }
 
 
 def layout(obs_id):
     return LAYOUTS.get(obs_id)
+
+
+def is_routev(lay):
+    return bool(lay and lay.get("routev"))
 
 
 def read_set(obs_id):
@@ -234,7 +276,9 @@ LOCK_NAMES = ["DATA_CLK wizard", "KERNEL_CLK wizard", "icap wizard", "spi wizard
 TIER_NAMES = {0: "FULL", 1: "tier 1", 2: "tier 2", 3: "?"}
 REC_TYPES = {1: "START", 2: "LINK_DOWN", 3: "RECAL_DONE", 4: "LOCK_LOSS", 5: "ECC_CE", 6: "ECC_UE", 7: "FENCE",
              8: "PR_ISOLATE", 9: "PR_RELEASE", 10: "THR_START", 11: "THR_STOP", 12: "PCIE_COR", 13: "PCIE_NONFATAL",
-             14: "PCIE_FATAL", 15: "PCIE_LINK", 16: "OBS_CLEAR", 17: "THR_TIER", 18: "TEMP_STALE", 19: "TEMP_FRESH"}
+             14: "PCIE_FATAL", 15: "PCIE_LINK", 16: "OBS_CLEAR", 17: "THR_TIER", 18: "TEMP_STALE", 19: "TEMP_FRESH",
+             20: "RM_DDR", 21: "CAL_DONE", 22: "CAL_LOST"}          # 20-22: route V
+ROUTEV_DEFERRED_MODES = ("emu", "hybrid")   # route V: the static gate runs on/off only (EMU/HYBRID deferred)
 DDR_BANK0_BASE = 0x200000000          # XRT device address of bank0 (AXI address 0)
 VALIDATED_BOARDS = {("MNV303212A-ADLT", "A7")}
 DDR_PART = "Micron MT40A1G16KNR-075 (16 Gb x16, DDR4-2666 grade)"
@@ -295,6 +339,11 @@ def record_detail(t, p):
         return "%s -> %s at %.2f C" % (TIER_NAMES[p >> 12 & 3], TIER_NAMES[p >> 10 & 3], code2c(p & 0x3FF))
     if t in (18, 19):
         return "last %.2f C" % code2c(p & 0x3FF)
+    if t == 20:
+        return "%s, ECC poller %s" % ("DDR KEPT" if p & 1 else "DDR PRUNED (no DDR in this xclbin)",
+                                      "present" if p >> 1 & 1 else "absent")
+    if t == 21:
+        return "calibrated %.1f ms after the RP release" % ((p << 14) / ACLK_HZ * 1e3)
     if t in (1, 3, 16):
         return ""
     return "count %d" % p
@@ -397,6 +446,28 @@ COUNTER_FIELDS = [
     (0x184, 0, 32, "recorder_next_index", "n", "flight recorder next record index"),
     (0x188, 0, 32, "recorder_wraps", "n", "flight recorder ring wraps (sat)"),
     (0xC8, 16, 10, "throttle_temp", "code", "the throttle's temperature (last sample)"),
+    # route V
+    (0x1C0, 0, 1, "rv_ddr_kept", "bool", "the loaded xclbin has DDR (KEPT); 0 = PRUNED, no DDR"),
+    (0x1C0, 1, 1, "rv_calibrated", "bool", "DDR calibrated as the static sees it (ddr_ready AND RP released)"),
+    (0x1C0, 2, 1, "rv_rp_calib", "bool", "the RM's term of XRT's calibration bit (the PRUNED filler drives 1)"),
+    (0x1C0, 3, 1, "rv_ecc_poller", "bool", "the loaded xclbin has the ECC poller"),
+    (0x1C0, 4, 1, "rv_rp_released", "bool", "the reconfigurable partition is released"),
+    (0x1C0, 5, 1, "rv_gate_open", "bool", "the host/P2P DDR window gate is open"),
+    (0x1C0, 6, 1, "rv_ecc_accepting", "bool", "ECC snapshots are being accepted"),
+    (0x1C4, 0, 16, "rv_loads_kept", "n", "xclbin loads with DDR (KEPT) since configuration/clear"),
+    (0x1C4, 16, 16, "rv_loads_pruned", "n", "xclbin loads without DDR (PRUNED) since configuration/clear"),
+    (0x1C8, 0, 16, "rv_calibrations", "n", "DDR calibrations completed since configuration/clear"),
+    (0x1C8, 16, 16, "rv_calibrations_lost", "n", "calibrations lost while a KEPT xclbin was loaded"),
+    (0x1CC, 0, 32, "rv_last_calibration_time", "cyc", "RP release to calibration, the last time"),
+    (0x1D0, 0, 32, "ecc_ce_this_load", "n", "ECC corrected errors since the last xclbin load"),
+    (0x1D4, 0, 16, "ecc_ue_polls_this_load", "n", "ECC polls that saw a UE since the last load"),
+    (0x1D4, 29, 1, "ecc_polled_this_load", "bool", "the poller completed a poll since the last load"),
+    (0x1D4, 31, 1, "ecc_ue_seen_this_load", "bool", "an uncorrectable error since the last load"),
+    (0x1D8, 0, 32, "ecc_polls_this_load", "n", "ECC polls since the last load"),
+    (0x1EC, 0, 32, "fenced_while_kept", "n", "host/P2P DDR accesses fenced while a KEPT xclbin was loaded (sat)"),
+    (0x1F0, 0, 32, "ts_last_calibration", "s262", "uptime at the last calibration completed"),
+    (0x1F4, 0, 32, "ts_last_fence_kept", "s262", "uptime at the last fence while KEPT"),
+    (0x1F8, 0, 32, "ts_last_load", "s262", "uptime at the last load settle"),
 ]
 for _b, _n in ((0x40, "p2p"), (0x60, "host"), (0x80, "peer")):
     COUNTER_FIELDS += [
@@ -468,7 +539,15 @@ def markdown():
         who = "all" if len(oids) == len(LAYOUTS) else ", ".join("%X" % (x & 0xF) for x in sorted(oids))
         L.append("| 0x%03X | %s | %s | %s | %s |" % (o, name, acc, who, desc.replace("|", "/")))
     L += ["", "Layout column: the last hex digit of the OBS_IDs that decode the offset (1 = full, 2 = E4 layout, "
-          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48).", "",
+          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V).", "",
+          "Route V (OBS_ID 0x0B5E0008, VBNV %s): the DDR4 MIG lives in the dynamic region; an xclbin either has "
+          "it (KEPT: its kernels use bank0) or not (PRUNED). 0x00-0x198 keep the E7a3 meaning; 0x14-0x2C stay "
+          "cumulative since configuration (the in-RP ECC poller sends deltas over the RP boundary) and 0x1D0-0x1E8 "
+          "hold the same values for the current load only. 0x10 [16] needs a KEPT xclbin to become 1. XRT's "
+          "calibration bit (0x32000 [0]) is the KEPT MIG's calibration, and 1 under a PRUNED xclbin. The DDR "
+          "mode register keeps its 2 bits but the gate runs ON/OFF only: a requested EMU runs ON and HYBRID runs "
+          "OFF (EMU/HYBRID deferred). Fences while PRUNED are expected (no DDR), fences while KEPT are counted "
+          "at 0x1EC. Recorder types 20 RM_DDR, 21 CAL_DONE, 22 CAL_LOST." % VBNV_ROUTEV, "",
           "Units: timestamps are uptime[47:16] (262.144 us); recorder records are 64 bits, [63:58] type "
           "[57:40] payload [39:0] uptime[47:8] (1.024 us). Temperature code to C: code * 509.3140064 / 1024 - "
           "280.2308787.", "",

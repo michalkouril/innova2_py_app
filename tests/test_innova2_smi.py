@@ -41,10 +41,18 @@ _E7 = [0xc0, 0xc4, 0xc8, 0xcc, 0xd0, 0xd4, 0xe0, 0xe4, 0xe8, 0xec, 0xf0, 0xf4, 0
        0x110, 0x120, 0x124, 0x128, 0x180, 0x184, 0x188, 0x18c, 0x190, 0x194, 0x198]
 _E7A3 = [0xd8, 0xdc, 0x140, 0x144, 0x148, 0x14c, 0x150, 0x154]
 _MON = [0x40, 0x44, 0x48, 0x4c, 0x50, 0x54, 0x60, 0x64, 0x68, 0x6c, 0x70, 0x74, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94]
+# route V (OBS_ID 0x0B5E0008): clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v, 10'h070..10'h07E
+_RV = list(range(0x1c0, 0x1fc, 4))
 RTL_DECODE = {0x0B5E0002: _BASE, 0x0B5E0004: _BASE + _E7 + _MON, 0x0B5E0005: _BASE + _E7,
-              0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3}
+              0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV}
 ROM_TS = {0x0B5E0002: 1792371600, 0x0B5E0004: 1792000004, 0x0B5E0005: 1792281600, 0x0B5E0006: 1792458000,
-          0x0B5E0007: 1792461600}
+          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200}
+RV = 0x0B5E0008
+ROUTEV_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v"
+
+
+def vbnv_of(obs_id):
+    return R.VBNV_ROUTEV if obs_id == RV else R.VBNV_FP8C
 WRITABLE = {0x30, 0xC0, 0xC4, 0xD8, 0xDC, 0x18C}
 
 
@@ -63,8 +71,11 @@ class Model:
         self.h, self.obs, self.mut = host, obs_id, set(mutants)
         self.decoded = {0x36000 + o for o in RTL_DECODE.get(obs_id, [0x30])} | {0x32000, 0x32008} | \
             set(range(0xA0400, 0xA0800, 4))
-        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007)
-        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007)
+        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV)
+        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV)
+        self.routev = obs_id == RV
+        # route V model: the loaded xclbin is KEPT (MIG, poller) or PRUNED (filler); calibrated only when KEPT
+        self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0)
         self.code = c2(temp_c)
         self.r = {o: 0 for o in RTL_DECODE.get(obs_id, [0x30])}
         self.r[0x30] = obs_id
@@ -82,6 +93,8 @@ class Model:
             self.r[0x180] = 0x0110                       # 2^16 records, format 1
         if self.e7a3:
             self.r[0xD8], self.r[0xDC] = 0x02D502E9, 0x00010100
+        if self.routev:
+            self.r[0x1CC] = int(0.48 * 250e6)              # calibrated 480 ms after its load
         self.tier, self.alarm = 0, 0
         self.t0 = host.t
         self.samples_base = 1000
@@ -152,18 +165,53 @@ class Model:
             return self.base_mhz
         return self.base_mhz / R.lvl(st >> 8)
 
+    # -- route V helpers (tests change self.rv, the model derives every register from it)
+    def set_pruned(self, pruned=True):
+        self.rv.update(kept=not pruned, cal=not pruned)
+        if pruned:
+            self.rv["loads_pruned"] += 1
+        else:
+            self.rv["loads_kept"] += 1
+
+    def _rv_reg(self, o):
+        rv = self.rv
+        ok = rv["kept"] and rv["cal"] and rv["released"]
+        if o == 0x1C0:
+            rp_calib = rv["cal"] if rv["kept"] else 1
+            return (R.RV_SIGNATURE << 16 | ok << 6 | ok << 5 | rv["released"] << 4 | rv["kept"] << 3 |
+                    rp_calib << 2 | (rv["kept"] and rv["cal"] and rv["released"]) << 1 | rv["kept"])
+        if o == 0x1C4:
+            return rv["loads_pruned"] << 16 | rv["loads_kept"]
+        if o == 0x1C8:
+            return rv["lost"] << 16 | rv["loads_kept"]
+        if o == 0x1D4:
+            return (1 << 29) if ok else 0
+        if o == 0x1D8:
+            return int(self.now() * 1000) if ok else 0
+        if o == 0x1EC:
+            return rv["fence_kept"]
+        return self.r.get(o, 0)
+
     # -- bus
     def read(self, off):
         if off not in self.decoded:
             raise HardLock("UNDECODED mgmt read 0x%06x" % off)
         self.reads.append(off)
         if off == 0x32000:
+            if self.routev:                               # route V: rp_calib AND released (ddr_health xrt_calib)
+                rv = self.rv
+                return int(rv["released"] and (rv["cal"] if rv["kept"] else 1))
             return self.memcalib
         if off == 0x32008:
             return self.mode
         if 0xA0400 <= off < 0xA0800:
             return self.sysmon.get((off - 0xA0400) // 4, 0)
         o = off - 0x36000
+        if self.routev and 0x1C0 <= o <= 0x1F8:
+            return self._rv_reg(o)
+        if self.routev and o == 0x00:                    # gate open only while a KEPT xclbin is calibrated
+            ok = self.rv["kept"] and self.rv["cal"] and self.rv["released"]
+            return (self.r[0x00] & ~(1 << 28)) | (ok << 28) if (self.r[0x00] >> 29 & 3) == 0 else self.r[0x00]
         up = int((self.now() + 120.0) * 250e6)
         if o == 0xB0:
             self._hi = up >> 32
@@ -272,7 +320,7 @@ class MockHost:
             self.model = Model(self, obs_id, temp_c=temp_c, mutants=mutants)
             ts = ROM_TS.get(obs_id, 1792999999)
             if xclmgmt:
-                self.attrs_.update({(m, "rom.m.1/VBNV"): R.VBNV_FP8C, (m, "rom.m.1/timestamp"): str(ts),
+                self.attrs_.update({(m, "rom.m.1/VBNV"): vbnv_of(obs_id), (m, "rom.m.1/timestamp"): str(ts),
                                     (m, "clock_wizard.m.1/clock_wiz_freqs"): "300\n500\n0\n0",
                                     (m, "clock_freq_counter.m.1/clock_counter_freqs"): "300\n500\n0\n0",
                                     (m, "ready"): "1", (m, "mig_calibration"): "1",
@@ -299,12 +347,13 @@ class MockHost:
             hdr = bytearray(512)
             hdr[:8] = b"xclbin2\0"
             hdr[320:328] = ts.to_bytes(8, "little")
-            hdr[352:352 + len(R.VBNV_FP8C)] = R.VBNV_FP8C.encode()
-            d = "/opt/xilinx/dsa/%s/test" % R.VBNV_FP8C
+            vb = vbnv_of(obs_id)
+            hdr[352:352 + len(vb)] = vb.encode()
+            d = "/opt/xilinx/dsa/%s/test" % vb
             for f in ("verify.xclbin", "bandwidth.xclbin"):
                 self.files[d + "/" + f] = bytes(hdr)
             self.xclbin_hdr = bytes(hdr)
-            self.examine = "|[%s]  |%s  |0x%08x  |user(inst=130)  |Yes            |" % (u, R.VBNV_FP8C, ts)
+            self.examine = "|[%s]  |%s  |0x%08x  |user(inst=130)  |Yes            |" % (u, vbnv_of(obs_id), ts)
         elif fpga == "tester":
             self._dev(m, "0x10ee", "0x9038", "0x058000", [rp, sw, "0000:07:08.0"], None)
             self.examine = ""
@@ -564,7 +613,8 @@ class StatusTests(unittest.TestCase):
             names = {x["name"] for x in json.loads(o)}
             self.assertIn("ecc_ce", names)
             self.assertIn("lock_losses_icap", names)
-            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007))
+            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV))
+            self.assertEqual("rv_ddr_kept" in names, oid == RV)
             self.assertEqual("axi_p2p_write_slverr" in names, oid == 0x0B5E0004)
             self.assertEqual("pr_count" in names, oid != 0x0B5E0002)
             # every register of the layout is dumped
@@ -975,3 +1025,129 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ----------------------------------------------------------------------------------------------- route V
+class RouteVTests(unittest.TestCase):
+    """OBS_ID 0x0B5E0008 (innova2_innova2_noddr_202320_3): DDR exists only in KEPT xclbins."""
+
+    def check(self, h, interval=1.0):
+        c = H.discover(h)[0]
+        return C.run_check(h, c, interval=interval)
+
+    def rules(self, r, sev=None):
+        return [i["rule"] for i in r["items"] if sev is None or i["severity"] == sev]
+
+    def test_map_against_the_rtl(self):
+        if not os.path.exists(ROUTEV_RTL):
+            self.skipTest("route-V shell source not on this machine")
+        oid, probs = R.check_rtl(open(ROUTEV_RTL).read())
+        self.assertEqual((oid, probs), (RV, []))
+
+    def test_identify_and_list_kept(self):
+        h = MockHost(RV)
+        rc, o, e = run_cli(h, ["list"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn(R.VBNV_ROUTEV, o)
+        self.assertIn("xclbin DDR KEPT", o)
+        h.model.set_pruned()
+        rc, o, e = run_cli(h, ["list", "--json"])
+        self.assertEqual(json.loads(o)[0]["xclbin_ddr"], "PRUNED")
+
+    def test_status_kept_and_pruned(self):
+        h = MockHost(RV)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("xclbin KEPT (MIG in the dynamic region), calibrated, window gate open", o)
+        self.assertIn("this load", o)
+        h.model.set_pruned()
+        rc, o, e = run_cli(h, ["status", "--json"])
+        st = json.loads(o)
+        self.assertEqual(st["routev"]["xclbin_ddr"], "PRUNED")
+        self.assertTrue(st["routev"]["rp_calib"])
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("PRUNED (no DDR in this xclbin)", o)
+        self.assertIn("window fenced (expected: no DDR)", o)
+
+    def test_check_pruned_is_normal(self):
+        h = MockHost(RV)
+        h.model.set_pruned()
+        r = self.check(h)
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        self.assertIn("ddr.pruned", self.rules(r, "INFO"))
+        self.assertNotIn("ddr.not_calibrated", self.rules(r))
+        self.assertNotIn("ddr.poller", self.rules(r))
+
+    def test_check_kept_clean(self):
+        r = self.check(MockHost(RV))
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        self.assertNotIn("ddr.pruned", self.rules(r))
+
+    def test_check_kept_not_calibrated_fails(self):
+        h = MockHost(RV)
+        h.model.rv["cal"] = False
+        r = self.check(h)
+        self.assertEqual(r["severity"], "FAIL")
+        self.assertIn("ddr.kept_not_calibrated", self.rules(r, "FAIL"))
+
+    def test_check_fences(self):
+        h = MockHost(RV)                                     # fences while PRUNED: expected (INFO)
+        h.model.set_pruned()
+        h.model.r[0xA0] = 5
+        r = self.check(h)
+        self.assertEqual(r["severity"], "OK")
+        self.assertIn("ddr.fenced_pruned", self.rules(r, "INFO"))
+        h = MockHost(RV)                                     # a fence while KEPT: FAIL
+        h.model.r[0xA0], h.model.rv["fence_kept"] = 6, 1
+        r = self.check(h)
+        self.assertIn("ddr.fenced_kept", self.rules(r, "FAIL"))
+        self.assertEqual(r["severity"], "FAIL")
+
+    def test_check_cal_lost_and_isolated(self):
+        h = MockHost(RV)
+        h.model.rv["lost"] = 1
+        self.assertIn("ddr.cal_lost", self.rules(self.check(h), "WARN"))
+        h = MockHost(RV)
+        h.model.rv["released"] = False
+        self.assertIn("ddr.rp_isolated", self.rules(self.check(h), "WARN"))
+
+    def test_ddr_mode_emu_hybrid_deferred(self):
+        h = MockHost(RV)
+        rc, o, e = run_cli(h, ["ddr-mode"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("emu, hybrid: not available -- deferred on route V", o)
+        rc, o, e = run_cli(h, ["ddr-mode", "--json"])
+        self.assertIn("emu", json.loads(o)["not_available"])
+        for m in ("emu", "hybrid"):
+            rc, o, e = run_cli(h, ["ddr-mode", m, "--yes"])
+            self.assertEqual(rc, 1)
+            self.assertIn("not available on route V", e + o)
+            self.assertEqual(h.model.writes, [], "a deferred mode must not write the register")
+        rc, o, e = run_cli(h, ["ddr-mode", "off", "--yes"])
+        self.assertEqual(rc, 0, e)
+        self.assertEqual(h.model.mode, 1)
+
+    def test_requested_deferred_mode_warns(self):
+        h = MockHost(RV)
+        h.model.mode = 2                                     # written by something else: the gate runs ON
+        r = self.check(h)
+        self.assertIn("ddr.mode_deferred", self.rules(r, "WARN"))
+        self.assertNotIn("ddr.mode", self.rules(r))
+
+    def test_old_layout_rules_unchanged(self):
+        h = MockHost(0x0B5E0006)
+        h.model.r[0x00] &= ~(1 << 28)                        # E7a3: a closed gate is still a FAIL
+        r = self.check(h)
+        self.assertIn("ddr.not_calibrated", self.rules(r, "FAIL"))
+        self.assertNotIn("ddr.pruned", self.rules(r))
+
+    def test_vbnv_layout_mismatch_warns(self):
+        h = MockHost(0x0B5E0006)
+        h.attrs_[("0000:08:00.0", "rom.m.1/VBNV")] = R.VBNV_ROUTEV
+        r = self.check(h)
+        self.assertIn("identity.obs_mismatch", self.rules(r, "WARN"))
+
+    def test_recorder_types(self):
+        self.assertEqual(R.REC_TYPES[20], "RM_DDR")
+        self.assertIn("PRUNED", R.record_detail(20, 0))
+        self.assertIn("ms after the RP release", R.record_detail(21, 100))

@@ -185,6 +185,9 @@ def t_ecc_live(sh, args):
     ev.append("ECC on %s, poller alive %s, polls +%d in 1 s, CE %d, UE polls %d; DDR %s (gate %s)" % (
         e1["ecc_on"], e1["poller_alive"], dp, e1["ce"], e1["ue_polls"], st["in_force"], st["gate_open"]))
     calibrated = st["in_force"] in ("on", "hybrid") and st["gate_open"]
+    if st.get("xclbin_ddr") == "PRUNED":
+        return result(name, "SKIP", "route V: the loaded xclbin has no DDR (PRUNED); load a bank0 (KEPT) xclbin, e.g. "
+                      "this shell's verify.xclbin, and run again", ev)
     if not calibrated:
         return result(name, "SKIP", "DDR is not in use (mode %s, gate %s)" % (st["in_force"], st["gate_open"]), ev)
     if not e1["ecc_on"] or not e1["poller_alive"] or dp < 100:
@@ -293,13 +296,22 @@ def t_ddr_soak(sh, args, confirm):
     name = "ddr-soak"
     sh.need("any")
     st = H.ddr_state(sh)
-    if st["in_force"] != "on" or not st["gate_open"]:
+    # route V: a PRUNED xclbin on the card is no reason to skip -- the soak loads this shell's verify.xclbin, which is
+    # a bank0 (KEPT) link, and that load builds and calibrates the DDR; it is checked right after the fill
+    routev_pruned = st.get("xclbin_ddr") == "PRUNED" and st["in_force"] == "on"
+    if (st["in_force"] != "on" or not st["gate_open"]) and not routev_pruned:
         return result(name, "SKIP", "DDR not in mode ON and calibrated (%s, gate %s)" % (st["in_force"], st["gate_open"]))
     from innova2_smi_xrt import tile_bank
     xclbin = xclbin_for(sh, args)
     ev, rows = [], []
     e0 = ecc_snap(sh)
     tile_bank(sh, xclbin, "fill", args.chunk_mb, args.size_mb, ev)
+    rv = H.routev(sh)
+    if rv is not None:
+        ev.append("route V after the fill load: xclbin DDR %s, calibrated %s, gate %s" % (
+            rv["xclbin_ddr"], rv["calibrated"], rv["gate_open"]))
+        if not (rv["ddr_present"] and rv["calibrated"] and rv["gate_open"]):
+            return result(name, "FAIL", "route V: %s is not a calibrated DDR (KEPT) xclbin on this card" % xclbin, ev)
     e1 = ecc_snap(sh)
     ev.append("fill: ECC/fence delta %s" % ecc_delta(e0, e1))
     total_mis = 0

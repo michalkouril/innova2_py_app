@@ -67,6 +67,22 @@ RULES = {
     "ddr.link_down_count":    dict(sev="INFO", hint="link-downs since configuration (each warm reboot adds one)"),
     "ddr.poller":             dict(sev="FAIL", hint="the ECC poller is not running while DDR is calibrated: the ECC "
                                                     "counters cannot be trusted"),
+    # route V (OBS_ID 0x0B5E0008): DDR exists only in xclbins whose kernels use it (KEPT)
+    "ddr.pruned":             dict(sev="INFO", hint="no DDR in this xclbin (PRUNED): the DDR window is fenced by design; "
+                                                    "load a bank0 (KEPT) xclbin to use DDR"),
+    "ddr.kept_not_calibrated": dict(sev="FAIL", hint="the loaded xclbin has DDR (KEPT) but calibration / ddr_ready is not "
+                                                     "up: kernels and host DMA cannot use bank0 (bad DDR card? reload)"),
+    "ddr.fenced_kept":        dict(sev="FAIL", hint="a host/P2P DDR access was fenced while a KEPT xclbin was loaded: "
+                                                    "DDR was not calibrated when it was used; 'innova2-smi clear' after "
+                                                    "diagnosis"),
+    "ddr.fenced_pruned":      dict(sev="INFO", hint="DDR accesses fenced while no DDR was loaded (PRUNED or during a "
+                                                    "load): expected, the fence answered instead of hanging"),
+    "ddr.cal_lost":           dict(sev="WARN", hint="DDR calibration was lost while a KEPT xclbin was loaded (a "
+                                                    "link-down reset or a MIG fault); see the recorder (CAL_LOST)"),
+    "ddr.mode_deferred":      dict(sev="WARN", hint="EMU/HYBRID are deferred on route V: the requested mode is not in "
+                                                    "force ('innova2-smi ddr-mode on')"),
+    "ddr.rp_isolated":        dict(sev="WARN", hint="the dynamic region is isolated (an xclbin load in progress or "
+                                                    "stuck): DDR state not meaningful"),
     # temperature
     "temp.hot_warn":          dict(sev="WARN", threshold=80.0, hint="FPGA hotter than the warning level; check "
                                                                    "airflow / fan"),
@@ -171,10 +187,31 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
     status = rd(0x00)
     mode_force = R.MODE_NAMES[status >> 29 & 3]
     gate = status >> 28 & 1
-    if mode_force in ("on", "hybrid") and not gate:
+    rv = R.is_routev(lay)
+    if rv:
+        # route V: DDR exists only when the loaded xclbin's kernels use it (KEPT). A closed gate under a PRUNED xclbin
+        # is NORMAL; it is a FAIL only when the xclbin has DDR and calibration / ddr_ready is not up.
+        info = rd(0x1C0)
+        kept, cal, released = info & 1, info >> 1 & 1, info >> 4 & 1
+        ev_rv = dict(rv_info="0x%08x" % info, xrt_calibration_bit=st["memcalib"] & 1, mode=mode_force)
+        if not released:
+            items.append(_item("ddr.rp_isolated", "the dynamic region is isolated", ev_rv))
+        elif not kept:
+            items.append(_item("ddr.pruned", "no DDR in this xclbin (PRUNED)", ev_rv))
+        elif not (cal and gate) and mode_force == "on":
+            items.append(_item("ddr.kept_not_calibrated", "the xclbin has DDR (KEPT) but it is %s" % (
+                "not calibrated" if not cal else "fenced (gate closed)"), ev_rv))
+        req = R.MODE_NAMES[st["mode"] & 3]
+        if req in R.ROUTEV_DEFERRED_MODES:
+            items.append(_item("ddr.mode_deferred", "requested DDR mode '%s' is deferred on route V (in force: %s)" % (
+                req, mode_force), dict(requested=req, in_force=mode_force)))
+        lost = rd(0x1C8) >> 16
+        if lost:
+            items.append(_item("ddr.cal_lost", "%d DDR calibrations lost while KEPT" % lost, dict(rv_cal="0x%08x" % rd(0x1C8))))
+    elif mode_force in ("on", "hybrid") and not gate:
         items.append(_item("ddr.not_calibrated", "DDR is not calibrated (mode %s, gate closed)" % mode_force,
                            dict(status="0x%08x" % status, xrt_calibration_bit=st["memcalib"] & 1)))
-    if expect_mode and mode_force != expect_mode:
+    if expect_mode and mode_force != expect_mode and not (rv and R.MODE_NAMES[st["mode"] & 3] in R.ROUTEV_DEFERRED_MODES):
         items.append(_item("ddr.mode", "DDR mode in force is '%s', expected '%s'" % (mode_force, expect_mode),
                            dict(requested=R.MODE_NAMES[st["mode"] & 3], in_force=mode_force)))
     ue, ce = rd(0x18), rd(0x14)
@@ -192,7 +229,16 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
         if s1:
             ev["ce_in_interval"] = delta(0x14)
         items.append(_item("ddr.ce", "%d ECC corrected errors" % ce, ev))
-    if rd(0xA0):
+    if rv:
+        fk, fall = rd(0x1EC), rd(0xA0)
+        if fk:
+            items.append(_item("ddr.fenced_kept", "%d host/P2P DDR accesses fenced while a KEPT xclbin was loaded" % fk,
+                               dict(fenced_while_kept=fk, fenced_total=fall,
+                                    last_at_s=round(rd(0x1F4) * R.TS_S, 3))))
+        if fall > fk:
+            items.append(_item("ddr.fenced_pruned", "%d DDR accesses fenced while no DDR was loaded" % (fall - fk),
+                               dict(fenced_total=fall, fenced_while_kept=fk)))
+    elif rd(0xA0):
         ev = dict(count=rd(0xA0))
         if rd(0xA4) >> 31 & 1:
             ev["first"] = "%s at 0x%x" % ("read" if rd(0xA4) >> 30 & 1 else "write", rd(0xAC) << 32 | rd(0xA8))
@@ -204,6 +250,11 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
     elif ld:
         items.append(_item("ddr.link_down_count", "%d link-downs since configuration" % ld, dict(count=ld)))
     calibrated = mode_force in ("on", "hybrid") and gate
+    if rv:
+        # route V: the poller exists only in a KEPT xclbin; judge it on this load's poll flag
+        info = rd(0x1C0)
+        calibrated = bool(info & 1 and info >> 1 & 1 and info >> 3 & 1 and gate)
+        ue = (ue & ~(1 << 29)) | (rd(0x1D4) & (1 << 29))
     if calibrated and not (ue >> 29 & 1):
         items.append(_item("ddr.poller", "ECC poller has never completed a poll", dict(ecc_ue_reg="0x%08x" % ue)))
     elif calibrated and s1 and delta(0x2C) == 0 and dt and dt >= 0.2:

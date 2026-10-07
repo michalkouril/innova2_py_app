@@ -114,12 +114,14 @@ def cmd_list(host, args):
         c["serial"] = bi.get("SN")
         hl = H.cx5_health(host, c)
         q = c.get("cx5_query") or {}
+        rv = H.routev(sh) if sh.ok else None
         rows.append(dict(index=c["index"], switch=c["switch"], cx5=c["cx5"], serial=bi.get("SN"), part=bi.get("PN"),
                          rev=bi.get("EC"), board_validated=bi.get("validated"), mgmt=c["mgmt"], user=c["user"],
                          bope=c["bope"], fpga_functions=c["fpga"], state=c["state"],
                          running_image=H.CX5_IMAGES.get(q.get("oper")) if "oper" in q else None,
                          cx5_query=q, cx5_health=hl, flags=c["flags"],
                          shell=sh.ident(), device_ready=H.xrt_ready(host, c["user"]),
+                         xclbin_ddr=rv["xclbin_ddr"] if rv else None,
                          dna=None, dna_note="the shell has no DNA_PORT reader; DNA is readable over JTAG only"))
     if args.json:
         print(H.jdump(rows))
@@ -140,8 +142,9 @@ def cmd_list(host, args):
             q["admin"], q["oper"], r["running_image"], q["status"], q.get("transport"))) if "oper" in q
             else (q.get("error") or "not queried")))
         if s.get("vbnv"):
-            print("        shell %s  ROM_TS %s (%s)  OBS_ID %s  build %s  Device Ready %s" % (
-                s["vbnv"], s["rom_ts"], s["rom_ts_hex"], s["obs_id"] or "-", s["build"] or "-", r["device_ready"] or "-"))
+            print("        shell %s  ROM_TS %s (%s)  OBS_ID %s  build %s  Device Ready %s%s" % (
+                s["vbnv"], s["rom_ts"], s["rom_ts_hex"], s["obs_id"] or "-", s["build"] or "-", r["device_ready"] or "-",
+                ("  xclbin DDR %s" % r["xclbin_ddr"]) if r["xclbin_ddr"] else ""))
         if s.get("refused") and r["state"] not in ("FLEX", "FPGA_MISSING", "OTHER_XILINX"):
             print("        not read further: %s" % s["refused"])
         for sev, t in r["flags"]:
@@ -162,6 +165,9 @@ def collect_status(host, card, sh):
     st["xrt"] = H.xrt_state(sh)
     st["clocks"] = H.clocks(sh)
     st["ddr"] = dict(H.ddr_state(sh), ecc=H.ecc(sh), **H.health(sh))
+    rv = H.routev(sh)
+    if rv:
+        st["routev"] = rv
     srcs, hw = H.temperature(sh)
     q = card.get("cx5_query") or {}
     if "fpga_mtmp_c" in q:
@@ -219,12 +225,32 @@ def render_status(st):
                                                          " (lost %d x)" % l["losses"] if l["losses"] else "")
                                             for l in st["ddr"]["locks"]))
     d = st["ddr"]
-    L.append("DDR            : mode %s (requested %s), MIG %s, %s, XRT calibration bit %d%s" % (
-        d["in_force"], d["requested"], "held in reset" if d["mig_held"] else "running",
-        "gate open" if d["gate_open"] else "GATE CLOSED (fenced)", d["xrt_calibration_bit"],
-        ", fenced access seen" if d["fenced_seen"] else ""))
+    rv = st.get("routev")
+    if rv:
+        # route V: the DDR is part of the loaded xclbin (KEPT) or absent (PRUNED); a closed gate is normal when PRUNED
+        L.append("DDR (route V)  : xclbin %s, %s, %s, XRT calibration bit %d; mode %s (requested %s%s)" % (
+            "KEPT (MIG in the dynamic region)" if rv["ddr_present"] else "PRUNED (no DDR in this xclbin)",
+            ("calibrated" if rv["calibrated"] else "NOT CALIBRATED") if rv["ddr_present"] else "nothing to calibrate",
+            "window gate open" if d["gate_open"] else ("window fenced (expected: no DDR)" if not rv["ddr_present"]
+                                                       else "WINDOW FENCED"),
+            d["xrt_calibration_bit"], d["in_force"], d["requested"],
+            "; emu/hybrid deferred on route V" if d["requested"] in R.ROUTEV_DEFERRED_MODES else ""))
+        L.append("  loads        : %d KEPT, %d PRUNED; %d calibrations (%d lost), the last %.1f ms after its load; "
+                 "fenced while KEPT %d; RP %s, ECC poller %s" % (
+                     rv["loads_kept"], rv["loads_pruned"], rv["calibrations"], rv["calibrations_lost"],
+                     rv["last_calibration_ms"], rv["fenced_while_kept"], "released" if rv["rp_released"] else "ISOLATED",
+                     "present" if rv["ecc_poller"] else "absent"))
+        el = rv["ecc_this_load"]
+        L.append("  this load    : ECC %d corrected, %d uncorrectable polls%s, %d polls" % (
+            el["ce"], el["ue_polls"], " (UE SEEN)" if el["ue_seen"] else "", el["polls"]))
+    else:
+        L.append("DDR            : mode %s (requested %s), MIG %s, %s, XRT calibration bit %d%s" % (
+            d["in_force"], d["requested"], "held in reset" if d["mig_held"] else "running",
+            "gate open" if d["gate_open"] else "GATE CLOSED (fenced)", d["xrt_calibration_bit"],
+            ", fenced access seen" if d["fenced_seen"] else ""))
     e = d["ecc"]
-    L.append("ECC            : %d corrected, %d uncorrectable polls%s, ECC %s, poller %s, %d polls" % (
+    L.append("ECC%s: %d corrected, %d uncorrectable polls%s, ECC %s, poller %s, %d polls" % (
+        " (cumulative)" if rv else "            ",
         e["ce"], e["ue_polls"], " (UE SEEN)" if e["ue_seen"] else "", fmt_bool(e["ecc_on"], "on", "OFF"),
         fmt_bool(e["poller_alive"], "alive", "NEVER POLLED"), e["polls"]))
     for k in ("first_ce", "first_ue"):
@@ -396,12 +422,21 @@ def cmd_clear(host, args):
 def cmd_ddr_mode(host, args):
     """Show or set the DDR mode: on | off | emu | hybrid (the register resets to ON at every cold boot)."""
     card, sh = open_card(host, args)
+    rv = R.is_routev(sh.lay)
     if not args.mode:
         st = H.ddr_state(sh)
-        out(args, st, "DDR mode requested %s, in force %s, MIG %s, gate %s, XRT calibration bit %d" % (
+        if rv:
+            st["available_modes"] = ["on", "off"]
+            st["not_available"] = {m: "deferred on route V (DDR is built into each xclbin)" for m in R.ROUTEV_DEFERRED_MODES}
+        out(args, st, "DDR mode requested %s, in force %s, MIG %s, gate %s, XRT calibration bit %d%s" % (
             st["requested"], st["in_force"], "held" if st["mig_held"] else "running",
-            "open" if st["gate_open"] else "closed", st["xrt_calibration_bit"]))
+            "open" if st["gate_open"] else "closed", st["xrt_calibration_bit"],
+            ("; xclbin DDR %s; modes on, off (emu, hybrid: not available -- deferred on route V)" % st["xclbin_ddr"])
+            if rv else ""))
         return 0
+    if rv and args.mode in R.ROUTEV_DEFERRED_MODES:
+        raise H.Refused("DDR mode '%s' is not available on route V (deferred): the DDR is built into each xclbin in "
+                        "the dynamic region and the static gate runs on/off only; nothing was written" % args.mode)
     if not confirm(args, "set the DDR mode of card %d (%s) to '%s'? Loaded kernels' DDR buffers change underneath "
                    "them" % (card["index"], sh.mgmt, args.mode)):
         return 1
