@@ -9,6 +9,7 @@
   innova2-smi list                         every Innova-2 card, found from its ConnectX-5, with the FPGA's state
   innova2-smi status   [-d CARD]           one-screen health of a card
   innova2-smi check    [-d CARD|--all]     passive "concerns only" check (safe while kernels/DMA run); exit 0/1/2
+  innova2-smi ddr      [-d CARD]           DDR configuration (per-build MIG table), measured speed, ECC totals
   innova2-smi memory   [-d CARD]           memory banks of the loaded xclbin: used, ready, PRUNED
   innova2-smi counters [-d CARD] [--watch N]   every counter the running shell exposes
   innova2-smi recorder [-d CARD] [-n N]    the flight recorder (E7a2+)
@@ -38,7 +39,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 
 
 def _version():
@@ -176,6 +177,7 @@ def collect_status(host, card, sh):
     st["xrt"] = H.xrt_state(sh)
     st["clocks"] = H.clocks(sh)
     st["ddr"] = dict(H.ddr_state(sh), ecc=H.ecc(sh), **H.health(sh))
+    st["ddr_speed"] = H.ddr_speed(sh, window=1.0)
     rv = H.routev(sh)
     if rv:
         st["routev"] = rv
@@ -258,6 +260,8 @@ def render_status(st):
             d["in_force"], d["requested"], "held in reset" if d["mig_held"] else "running",
             "gate open" if d["gate_open"] else "GATE CLOSED (fenced)", d["xrt_calibration_bit"],
             ", fenced access seen" if d["fenced_seen"] else ""))
+    if st.get("ddr_speed"):
+        L.append("DDR speed      : " + ddr_speed_line(st["ddr_speed"]))
     e = d["ecc"]
     L.append("ECC%s: %d corrected, %d uncorrectable polls%s, ECC %s, poller %s, %d polls" % (
         " (cumulative)" if rv else "            ",
@@ -380,6 +384,94 @@ def cmd_memory(host, args):
     out(args, m, "card %d (%s, %s)\n" % (card["index"], card.get("user") or "-", sh.name or card["state"]) +
         "\n".join(render_memory(m, prefix="memory: ", detail=True)))
     return 0 if m.get("available") else 1
+
+
+# ----------------------------------------------------------------------------------------------- ddr
+def ddr_speed_line(sp):
+    """One line: the table's speed and the measured one."""
+    t, m = sp.get("table"), sp.get("measured") or {}
+    tab = ("%s (%s: tCK %d ps, CL%d/CWL%d)" % (t["speed_grade"], t["variant"], t["tck_ps"], t["cl"], t["cwl"])
+           if t else sp.get("table_source"))
+    if m.get("ui_clk_mhz"):
+        meas = "measured ui_clk %.2f MHz = %.0f MT/s (+-%.2f%%, %.1f s)%s" % (
+            m["ui_clk_mhz"], m["mts"], m["precision_pct"], m["window_s"],
+            ", %+.2f%% vs table" % m["vs_table_pct"] if "vs_table_pct" in m else "")
+    else:
+        meas = "not measured: %s" % m.get("reason")
+    return "%s; %s" % (tab, meas)
+
+
+def render_ddr(d):
+    L = []
+    if not d.get("available"):
+        L.append("DDR: not available on this shell (%s)" % d.get("reason"))
+        if d.get("xrt_mig_calibration") is not None:
+            L.append("  XRT mig_calibration (xclmgmt sysfs): %s" % d["xrt_mig_calibration"])
+        L.append("  MIG table: %s" % (d["table_source"]))
+        return "\n".join(L)
+    c, sp = d["calibration"], d["speed"]
+    L.append("calibration : XRT calibration bit %d, gate %s, mode %s (requested %s)%s" % (
+        c["xrt_calibration_bit"], "open" if c["gate_open"] else "CLOSED", c["in_force"], c["requested"],
+        (", xclbin DDR %s" % c["xclbin_ddr"]) if c.get("xclbin_ddr") else ""))
+    t = sp.get("table")
+    if t:
+        L.append("MIG (table) : %s, %s; %s%s" % (t["variant"], sp["table_source"], t["part"],
+                                                ", " + t["part_note"] if t.get("part_note") else ""))
+        L.append("  rate      : tCK %d ps = DDR clock %.2f MHz, %s (%.1f MT/s), PHY %d:1, ui_clk %.3f MHz" % (
+            t["tck_ps"], t["ddr_clk_mhz"], t["speed_grade"], t["mts"], t["phy_ratio"], t["ui_clk_mhz"]))
+        L.append("  timing    : CL %d, CWL %d, tRCD %d, tRP %d, tRAS %d, tRFC %d (DDR4 clocks)" % (
+            t["cl"], t["cwl"], t["trcd"], t["trp"], t["tras"], t["trfc"]))
+        L.append("  interface : %s, ECC %s, InputClockPeriod %d ps, CA drive %s, ECC poll every %d ui_clk" % (
+            t["width"], "on" if t["ecc"] else "off", t["input_clk_ps"], t["ca_drive"], t["poll_cyc"]))
+        if t.get("per_xclbin"):
+            L.append("  note      : route V -- the MIG is in each KEPT xclbin; these are the template's values")
+    else:
+        L.append("MIG (table) : %s" % sp["table_source"])
+    if sp.get("ddr_info"):
+        L.append("DDR_INFO    : " + ", ".join("%s=%s" % kv for kv in sp["ddr_info"].items()))
+    m = sp["measured"]
+    if m.get("ui_clk_mhz"):
+        L.append("measured    : ui_clk %.3f MHz -> %.1f MT/s, +-%.2f%% (%d polls in %.3f s)%s" % (
+            m["ui_clk_mhz"], m["mts"], m["precision_pct"], m["polls"], m["window_s"],
+            "; %+.2f%% vs the table" % m["vs_table_pct"] if "vs_table_pct" in m else ""))
+        L.append("  how       : %s" % m["formula"])
+        if m.get("note"):
+            L.append("  note      : %s" % m["note"])
+    else:
+        L.append("measured    : not measured: %s" % m.get("reason"))
+    e = d["ecc"]
+    L.append("ECC         : %d corrected, %d uncorrectable polls%s, ECC %s, %d polls (cumulative since configuration)" % (
+        e["ce"], e["ue_polls"], " (UE SEEN)" if e["ue_seen"] else "", "on" if e["ecc_on"] else "OFF", e["polls"]))
+    for k in ("first_ce", "first_ue"):
+        if e.get(k):
+            L.append("  %-9s : %s" % (k.replace("_", " "), R.ffa_str(e[k])))
+    if d.get("ecc_this_load"):
+        el = d["ecc_this_load"]
+        L.append("  this load : %d corrected, %d uncorrectable polls%s" % (el["ce"], el["ue_polls"],
+                                                                         " (UE SEEN)" if el["ue_seen"] else ""))
+    return "\n".join(L)
+
+
+def cmd_ddr(host, args):
+    """DDR configuration and speed: calibration, mode, the build's MIG parameters (a per-build table: no shell reports
+    its MIG configuration), the MIG ui_clk MEASURED passively from the ECC poller's poll count against the 250 MHz
+    uptime counter (MT/s = 8 x ui_clk), and the ECC totals. Loads only; no XRT context."""
+    card, sh = open_card(host, args, need_shell=False)
+    if not sh.ok:
+        mc = host.attr(card["mgmt"], "mig_calibration") if card.get("mgmt") else None
+        d = dict(available=False, reason=sh.reason or card["state"], xrt_mig_calibration=mc,
+                 table=R.mig_config(sh.rom_ts) if sh.rom_ts else None,
+                 table_source="build table (ROM_TS %d)" % sh.rom_ts if R.mig_config(sh.rom_ts) else
+                 "unknown build (ROM_TS %s)" % sh.rom_ts)
+        out(args, d, render_ddr(d))
+        return 1
+    d = dict(available=True, calibration=H.ddr_state(sh), speed=H.ddr_speed(sh, window=args.window), ecc=H.ecc(sh))
+    rv = H.routev(sh)
+    if rv:
+        d["calibration"]["calibrated"] = rv["calibrated"]
+        d["ecc_this_load"] = rv["ecc_this_load"]
+    out(args, d, "card %d (%s, %s)\n" % (card["index"], sh.mgmt, sh.name) + render_ddr(d))
+    return 0
 
 
 # ----------------------------------------------------------------------------------------------- check
@@ -816,6 +908,9 @@ def build_parser():
                    help="the DDR mode this card should be in (default on; '' = any)")
     q.add_argument("-v", "--verbose", action="store_true", help="also show INFO (known benign) items")
     q.add_argument("--rules", action="store_true", help="print the rules table and exit")
+    q = add("ddr", cmd_ddr, "DDR configuration, measured speed and ECC totals")
+    q.add_argument("--window", type=float, default=1.5, help="measurement window in seconds (default 1.5; the "
+                                                              "precision is about 2/(1000 x window) + 0.08 %%)")
     add("memory", cmd_memory, "memory banks of the loaded xclbin (used / ready / PRUNED)")
     q = add("counters", cmd_counters, "every counter the running shell exposes")
     q.add_argument("--watch", type=float, metavar="N", help="re-read every N seconds and show deltas (Ctrl-C stops)")

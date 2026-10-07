@@ -106,6 +106,7 @@ class Model:
         self.peer = {0x00: R.PEER_ID, 0x04: 1, 0x08: 0xFB000000, 0x10: 20, 0x20: 4}
         self.alias = {0x00: R.ALIAS_ID, 0x04: 0x101, 0x08: 0x800000, 0x10: 18, 0x18: 0x2000000}
         self.base_mhz = 300.0
+        self.ui_mhz = None                                # None: the build table's ui_clk (a mis-built shell sets it)
 
     # -- dynamics
     def now(self):
@@ -158,6 +159,11 @@ class Model:
             lvl = flvl
         return (self.code << 16 | self.tier << 12 | (lvl & 3) << 8 | fs << 7 | stale << 6 | tier_eff << 4 |
                 (req and gk) << 3 | (req and gd) << 2 | req << 1 | (tier_eff != 0))
+
+    def poll_hz(self):
+        cfg = R.mig_config(ROM_TS.get(self.obs))
+        ui = self.ui_mhz if self.ui_mhz is not None else (cfg["ui_clk_mhz"] if cfg else 333.0)
+        return ui * 1e6 / (cfg["poll_cyc"] if cfg else 333000)
 
     def delivered_mhz(self):
         st = self.thr_status()
@@ -218,8 +224,8 @@ class Model:
             return up & 0xFFFFFFFF
         if o == 0xB4:
             return getattr(self, "_hi", 0) if "uptime_stuck" not in self.mut else 0
-        if o == 0x2C:
-            return self.r[0x2C] if "polls_stuck" in self.mut else (self.r[0x2C] + int(self.now() * 1000)) & 0xFFFFFFFF
+        if o == 0x2C:                                     # one poll per POLL_CYC cycles of the build's ui_clk
+            return self.r[0x2C] if "polls_stuck" in self.mut else (self.r[0x2C] + int(self.now() * self.poll_hz())) & 0xFFFFFFFF
         if o == 0x140:
             return self._samples()
         if o == 0x144:
@@ -747,6 +753,7 @@ CONCERNS = [
     ("fenced", _reg(0xA0, 2), "ddr.fenced", "WARN"),
     ("not calibrated", _reg(0x00, 0x000000F9), "ddr.not_calibrated", "FAIL"),
     ("mode off", lambda h: (h.model.write(0x32008, 1)), "ddr.mode", "WARN"),
+    ("DDR rate not the build's", lambda h: setattr(h.model, "ui_mhz", 333.33), "ddr.rate_mismatch", "WARN"),
     ("poller dead", _reg(0x18, 0x40000000), "ddr.poller", "FAIL"),
     ("poller stuck", lambda h: h.model.mut.add("polls_stuck"), "ddr.poller", "FAIL"),
     ("hot", lambda h: heat(h, 85), "temp.hot_warn", "WARN"),
@@ -1347,3 +1354,107 @@ class BoardIdTests(unittest.TestCase):
         h = MockHost(0x0B5E0007)
         rc, o, e = run_cli(h, ["list"])
         self.assertIn("serial MT1935X08327  board MNV303212A-ADLT rev A7", o)
+
+
+# ----------------------------------------------------------------------------------------------- DDR speed / MIG table
+class DdrSpeedTests(unittest.TestCase):
+    def rules(self, r, sev=None):
+        return [i["rule"] for i in r["items"] if sev is None or i["severity"] == sev]
+
+    def ddr(self, h, *extra):
+        rc, o, e = run_cli(h, ["ddr", "--json"] + list(extra))
+        return rc, json.loads(o) if o.strip().startswith("{") else o
+
+    def test_table_from_the_build_reports(self):
+        t = R.mig_config(1792371600)                                  # E6b-2400dw8
+        self.assertEqual((t["tck_ps"], t["cl"], t["cwl"], t["trcd"], t["trp"], t["tras"], t["trfc"], t["poll_cyc"]),
+                         (833, 19, 18, 19, 19, 39, 421, 300000))
+        self.assertEqual((t["speed_grade"], t["ui_clk_mhz"], t["width"]), ("DDR4-2400", 300.12, "72-bit (64 data + 8 ECC)"))
+        t = R.mig_config(1792022400)                                  # E6b
+        self.assertEqual((t["tck_ps"], t["cl"], t["cwl"], t["input_clk_ps"], t["ca_drive"][:10], t["speed_grade"]),
+                         (750, 19, 18, 10000, "RDRV_40_40", "DDR4-2666"))
+        self.assertTrue(R.mig_config(1792461600)["ca_drive"].startswith("RDRV_48_48"))
+        self.assertEqual(R.mig_config(1792368000)["cl"], 16)             # E6b-2400: catalogue part, CL16/CWL12
+        self.assertTrue(R.mig_config(1792465200)["per_xclbin"])
+        self.assertIsNone(R.mig_config(1791763200))
+        for ts in R.SHELLS:
+            self.assertIn(ts, R.MIG_BUILDS, "every known build has a MIG entry")
+
+    def test_formula(self):
+        # 333000 cycles per poll, 1000 polls in 1 s of 250 MHz aclk -> 333 MHz ui_clk; 4:1 -> 1332 MHz DDR clock, 2664 MT/s
+        ui, dp, dt = R.ui_clk_from_polls(10, 0, 1010, 250000000, 333000)
+        self.assertEqual((round(ui, 3), dp, dt), (333.0, 1000, 1.0))
+        ck, uic, mts = R.mig_rates(750)
+        self.assertAlmostEqual(mts, 8 * uic)
+        self.assertAlmostEqual(uic, 333.333, places=3)
+        self.assertEqual(R.ui_clk_from_polls(0xFFFFFFF0, 0, 0x10, 250000000, 333000)[1], 0x20)   # poll count wraps
+        self.assertEqual(R.ui_clk_precision_pct(1500), 0.21)
+
+    def test_ddr_command_2666(self):
+        h = MockHost(0x0B5E0007)                                      # E7a3-2666ca48
+        rc, d = self.ddr(h)
+        self.assertEqual(rc, 0)
+        m = d["speed"]["measured"]
+        self.assertAlmostEqual(m["ui_clk_mhz"], 333.33, delta=333.33 * m["precision_pct"] / 100)
+        self.assertAlmostEqual(m["mts"], 2666.7, delta=2666.7 * m["precision_pct"] / 100)
+        self.assertLess(abs(m["vs_table_pct"]), m["precision_pct"])
+        self.assertLess(m["precision_pct"], 0.3)
+        self.assertEqual(d["speed"]["table"]["ca_drive"][:10], "RDRV_48_48")
+        rc, o, e = run_cli(h, ["ddr"])
+        for want in ("CL 19, CWL 18, tRCD 20, tRP 20, tRAS 43, tRFC 467", "InputClockPeriod 10000 ps", "PHY 4:1",
+                     "measured    : ui_clk 333.", "ECC         : 0 corrected"):
+            self.assertIn(want, o)
+        self.assertEqual(h.model.writes, [])
+
+    def test_status_line_and_check_clean(self):
+        h = MockHost(0x0B5E0006)                                      # E7a3-2400 (dw8_833)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertRegex(o, r"DDR speed      : DDR4-2400 \(dw8_833: tCK 833 ps, CL19/CWL18\); measured ui_clk 300\.\d+ MHz = 240\d MT/s")
+        r = C.run_check(h, H.discover(h)[0], interval=1.0)
+        self.assertNotIn("ddr.rate_mismatch", self.rules(r))
+
+    def test_mis_built_shell_is_flagged(self):
+        h = MockHost(0x0B5E0007)
+        h.model.ui_mhz = 300.0                                        # a 2400 MIG behind a 2666 ROM_TS
+        r = C.run_check(h, H.discover(h)[0], interval=1.0)
+        self.assertIn("ddr.rate_mismatch", self.rules(r, "WARN"))
+        i = [x for x in r["items"] if x["rule"] == "ddr.rate_mismatch"][0]
+        self.assertAlmostEqual(i["evidence"]["deviation_pct"], -10.0, delta=0.3)
+        h = MockHost(0x0B5E0007)
+        h.model.ui_mhz = 333.33 * 1.005                               # inside the 1 % tolerance
+        self.assertNotIn("ddr.rate_mismatch", self.rules(C.run_check(h, H.discover(h)[0], interval=1.0)))
+        self.assertEqual(C.run_check(h, H.discover(h)[0], interval=0)["severity"], "OK")   # one snapshot: no rate
+
+    def test_unknown_build_and_not_calibrated(self):
+        h = MockHost(0x0B5E0004)                                      # ROM_TS not in the table
+        rc, d = self.ddr(h)
+        self.assertIn("unknown build", d["speed"]["table_source"])
+        self.assertIsNone(d["speed"]["measured"]["ui_clk_mhz"])
+        self.assertIn("ddr.rate_unverified", self.rules(C.run_check(h, H.discover(h)[0]), "INFO"))
+        h = MockHost(0x0B5E0007)
+        h.model.r[0x00] &= ~(1 << 28)
+        rc, d = self.ddr(h)
+        self.assertIn("gate closed", d["speed"]["measured"]["reason"])
+
+    def test_routev(self):
+        h = MockHost(RV)
+        rc, d = self.ddr(h)
+        self.assertIn("template", d["speed"]["measured"]["note"])
+        self.assertIn("ddr.rate_unverified", self.rules(C.run_check(h, H.discover(h)[0]), "INFO"))
+        h.model.set_pruned()
+        rc, d = self.ddr(h)
+        self.assertIn("PRUNED", d["speed"]["measured"]["reason"])
+        R.DDR_INFO_MAPS[RV] = {"regs": {0x1CC: ("cal_time_cycles", int)}}   # the hook for route V's DDR_INFO block
+        try:
+            rc, d = self.ddr(h)
+            self.assertIn("cal_time_cycles", d["speed"]["ddr_info"])
+        finally:
+            R.DDR_INFO_MAPS.pop(RV)
+
+    def test_old_shell_not_available(self):
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.0", "rom.m.1/VBNV"): R.VBNV_OLD,
+                                              ("0000:08:00.0", "mig_calibration"): "0"})
+        rc, o, e = run_cli(h, ["ddr"])
+        self.assertEqual(rc, 1)
+        self.assertIn("not available on this shell", o)
+        self.assertEqual(h.model.reads, [])

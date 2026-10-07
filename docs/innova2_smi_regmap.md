@@ -159,3 +159,19 @@ Throttle power-on defaults: E7a2 THR_CTRL 0x31, THR_THRESH 0x02D402E9 (745/724);
 
 peer_window: 0x00 ID 0x50454552, 0x04 CTRL [0] enable, 0x08/0x0C BASE0, 0x10 WIN_LOG2, 0x14 writes forwarded, 0x18 reads forwarded, 0x1C refused, 0x20 NWIN, 0x28-0x3C BASE1-3. p2p_alias: 0x00 ID 0x50414C49, 0x04 CTRL [0] enable [8] in force, 0x08/0x0C ALIAS, 0x10 WIN_LOG2, 0x18/0x1C TGT_BASE, 0x20/0x24 writes/reads redirected, 0x28 writes outstanding.
 
+## MIG configuration per build (`innova2-smi ddr`)
+
+No shell reports its MIG configuration in a register, so innova2-smi keeps this table by ROM_TS (read from each build's generated MIG RTL, IP parameters, par XDC, CA-drive gate and create_project log). Timing in DDR4 clock cycles; every build's PHY is 4:1, so ui_clk = 1/(4 tCK) and MT/s = 8 x ui_clk. The ui_clk is measured passively: the ECC poller completes one poll per POLL_CYC ui_clk cycles (0x2C counts them), timed by the 250 MHz uptime counter (0xB0/0xB4); precision about 2/polls + 0.08 %.
+
+| ROM_TS | build | variant | part | tCK ps | MT/s | CL/CWL | tRCD/tRP/tRAS/tRFC | width | ECC | InputClockPeriod ps | CA drive | POLL_CYC |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1792022400 | E6b | dw8_750 (before mig_variant.tcl) | MT40A1G16KNRD8B-075 | 750 | 2667 | 19/18 | 20/20/43/467 | 72 | on | 10000 | RDRV_40_40 (MIG default) | 333000 |
+| 1792281600 | E7a2 | dw8_750 (before mig_variant.tcl) | MT40A1G16KNRD8B-075 | 750 | 2667 | 19/18 | 20/20/43/467 | 72 | on | 10000 | RDRV_40_40 (MIG default) | 333000 |
+| 1792368000 | E6b-2400 | mwrnd833 | MT40A1G16WBU-083E | 833 | 2401 | 16/12 | 16/16/39/421 | 72 | on | 9996 | RDRV_40_40 (MIG default) | 300000 |
+| 1792371600 | E6b-2400dw8 | dw8_833 | MT40A1G16KNRD8B-075 | 833 | 2401 | 19/18 | 19/19/39/421 | 72 | on | 9996 | RDRV_40_40 (MIG default) | 300000 |
+| 1792458000 | E7a3-2400 | dw8_833 | MT40A1G16KNRD8B-075 | 833 | 2401 | 19/18 | 19/19/39/421 | 72 | on | 9996 | RDRV_40_40 (MIG default) | 300000 |
+| 1792461600 | E7a3-2666ca48 | e6b750 | MT40A1G16KNRD8B-075 | 750 | 2667 | 19/18 | 20/20/43/467 | 72 | on | 10000 | RDRV_48_48 (ca_drive.tcl, routed gate passed) | 333000 |
+| 1792465200 | routeV | e6b750 (route-V template; per xclbin) | MT40A1G16KNRD8B-075 | 750 | 2667 | 19/18 | 20/20/43/467 | 72 | on | 10000 | RDRV_48_48 (template ddr_rp_late.xdc) | 333000 |
+
+Dw8 CSV builds use `custom CSV custom_parts_mt40a1g16knr075_dw8b (the board's MT40A1G16KNR-075 described as device width 8)`. Route V's MIG is in each KEPT xclbin: its row is the template's. Any other ROM_TS is an unknown build.
+

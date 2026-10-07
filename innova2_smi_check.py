@@ -68,6 +68,11 @@ RULES = {
                                                     "the link-down window of a warm reboot)"),
     "ddr.link_down_rising":   dict(sev="WARN", hint="the PCIe link dropped during the check interval"),
     "ddr.link_down_count":    dict(sev="INFO", hint="link-downs since configuration (each warm reboot adds one)"),
+    "ddr.rate_mismatch":      dict(sev="WARN", threshold=1.0, hint="the MIG ui_clk measured from the ECC poll count "
+                                                                   "differs from this build's table by more than this "
+                                                                   "(%): a wrong table entry or a mis-built shell"),
+    "ddr.rate_unverified":    dict(sev="INFO", hint="the DDR rate could not be compared with a table (unlisted build, "
+                                                    "or route V, whose MIG comes with each xclbin)"),
     "ddr.poller":             dict(sev="FAIL", hint="the ECC poller is not running while DDR is calibrated: the ECC "
                                                     "counters cannot be trusted"),
     # route V (OBS_ID 0x0B5E0008): DDR exists only in xclbins whose kernels use it (KEPT)
@@ -271,6 +276,9 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
     elif calibrated and s1 and delta(0x2C) == 0 and dt and dt >= 0.2:
         items.append(_item("ddr.poller", "ECC poll counter did not move in %.1f s" % dt, dict(polls=rd(0x2C))))
 
+    # ---- DDR rate: ui_clk from the ECC poll count over the two snapshots (needs >= 0.3 s and a calibrated MIG)
+    items += rate_items(sh, s0, s1)
+
     # ---- temperature
     sm = st["sysmon"]
     if not sm["adc_converting"]:
@@ -451,6 +459,33 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
                                    "(%.1f s)" % (n, ts, max(boot_at, 0)), dict(event=n, at_s=round(ts, 3),
                                                                                host_boot_at_s=round(boot_at, 3))))
     return items
+
+
+def rate_items(sh, s0, s1):
+    if not s1 or s1["t"] - s0["t"] < 0.3:
+        return []
+    ok0, _ = H.ddr_ready_for_rate(sh, s0["regs"])
+    ok1, _ = H.ddr_ready_for_rate(sh, s1["regs"])
+    r0, r1 = s0["regs"], s1["regs"]
+    if not (ok0 and ok1) or (r0[0x10] & 0xFFFF) != (r1[0x10] & 0xFFFF):
+        return []
+    cfg = R.mig_config(sh.rom_ts)
+    if not cfg:
+        return [_item("ddr.rate_unverified", "no MIG table for ROM_TS %s" % sh.rom_ts, {})]
+    ui, dp, dt = R.ui_clk_from_polls(r0[0x2C], r0[0xB4] << 32 | r0[0xB0], r1[0x2C], r1[0xB4] << 32 | r1[0xB0],
+                                     cfg["poll_cyc"])
+    if not ui:
+        return []                                   # a dead poller is ddr.poller's finding
+    m = H.rate_result(cfg, ui, dp, dt, routev=R.is_routev(sh.lay))
+    ev = dict(measured_ui_clk_mhz=m["ui_clk_mhz"], table_ui_clk_mhz=cfg["ui_clk_mhz"], measured_mts=m["mts"],
+              table=cfg["speed_grade"], deviation_pct=m["vs_table_pct"], precision_pct=m["precision_pct"])
+    if R.is_routev(sh.lay):
+        return [_item("ddr.rate_unverified", "route V: measured %.0f MT/s (template %s, %+.2f%%)" % (
+            m["mts"], cfg["speed_grade"], m["vs_table_pct"]), ev)]
+    if abs(m["vs_table_pct"]) > RULES["ddr.rate_mismatch"]["threshold"] + m["precision_pct"]:
+        return [_item("ddr.rate_mismatch", "DDR measured %.1f MT/s (ui_clk %.2f MHz), table %s (%.2f MHz): %+.2f%%" % (
+            m["mts"], m["ui_clk_mhz"], cfg["speed_grade"], cfg["ui_clk_mhz"], m["vs_table_pct"]), ev)]
+    return []
 
 
 def platform_items(sh):

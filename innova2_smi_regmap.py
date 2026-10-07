@@ -283,6 +283,70 @@ DDR_BANK0_BASE = 0x200000000          # XRT device address of bank0 (AXI address
 VALIDATED_BOARDS = {("MNV303212A-ADLT", "A7")}
 DDR_PART = "Micron MT40A1G16KNR-075 (16 Gb x16, DDR4-2666 grade)"
 
+# ----------------------------------------------------------------------------------------------- MIG per build
+# No shell has a register that reports its MIG configuration, so the table is per build (ROM_TS). Every value was read
+# from the build tree on 2026-10-06: tCK/tRCD/tRP/tRAS/tRFC/DQ_WIDTH/ECC/nCK_PER_CLK/MEMORY_PART from the generated
+# MIG top (rtl/ip_top/*ddrmem*_ddr4.sv), CL/CWL/InputClockPeriod/PhyClockRatio/CustomParts from the IP's .xml, the CA
+# drive from the MIG's par .xdc (RDRV_40_40 on every build) plus the ca_drive.tcl override and its routed gate
+# (E7a3-2666ca48: "CA OUTPUT_IMPEDANCE RDRV_48_48, failures=0"), POLL_CYC from the BD cell mgmt_status (create_project's
+# "CP mgmt_status POLL_CYC" line; the IP default 333000 where it is not overridden). Timing parameters are in DDR4
+# clock cycles. Every build runs the PHY at 4:1: ui_clk = 1 / (4 tCK), data rate = 2 / tCK = 8 x ui_clk.
+DW8_CSV = "custom CSV custom_parts_mt40a1g16knr075_dw8b (the board's MT40A1G16KNR-075 described as device width 8)"
+_MIG_2666 = dict(part="MT40A1G16KNRD8B-075", part_note=DW8_CSV, tck_ps=750, cl=19, cwl=18, trcd=20, trp=20, tras=43,
+                 trfc=467, dq_width=72, ecc=True, input_clk_ps=10000, phy_ratio=4, ca_drive="RDRV_40_40 (MIG default)",
+                 poll_cyc=333000)
+_MIG_2400_DW8 = dict(_MIG_2666, tck_ps=833, trcd=19, trp=19, tras=39, trfc=421, input_clk_ps=9996, poll_cyc=300000)
+MIG_BUILDS = {
+    1792022400: dict(_MIG_2666, variant="dw8_750 (before mig_variant.tcl)"),
+    1792368000: dict(_MIG_2400_DW8, variant="mwrnd833", part="MT40A1G16WBU-083E", part_note="Vivado catalogue part",
+                     cl=16, cwl=12, trcd=16, trp=16),
+    1792371600: dict(_MIG_2400_DW8, variant="dw8_833"),
+    1792281600: dict(_MIG_2666, variant="dw8_750 (before mig_variant.tcl)"),
+    1792458000: dict(_MIG_2400_DW8, variant="dw8_833"),
+    1792461600: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_48_48 (ca_drive.tcl, routed gate passed)"),
+    # route V: the MIG is in each KEPT xclbin; these are the template's (MIG_VARIANT e6b750, CA_DRIVE RDRV_48_48, the
+    # in-RP ddr_ecc_poller's POLL_CYC 333000). An xclbin built from another template differs: DDR_INFO will say.
+    1792465200: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
+                     ca_drive="RDRV_48_48 (template ddr_rp_late.xdc)"),
+}
+# Route V's planned DDR_INFO block (MIG constants + a ui_clk counter, from the template) replaces the table and the poll
+# estimate when its OBS_ID layout lists it: {obs_id: {"regs": {offset: (name, decoder)}}}. Empty until that map exists.
+DDR_INFO_MAPS = {}
+
+
+def mig_rates(tck_ps, phy_ratio=4):
+    """(DDR clock MHz, ui_clk MHz, MT/s) of a tCK."""
+    ck = 1e6 / tck_ps
+    return ck, ck / phy_ratio, 2 * ck
+
+
+def mig_config(rom_ts):
+    """The MIG table entry for a build, with its derived rates; None for an unknown build."""
+    m = MIG_BUILDS.get(rom_ts)
+    if m is None:
+        return None
+    ck, ui, mts = mig_rates(m["tck_ps"], m["phy_ratio"])
+    return dict(m, ddr_clk_mhz=round(ck, 2), ui_clk_mhz=round(ui, 3), mts=round(mts, 1),
+                speed_grade="DDR4-%d" % int(mts), width="%d-bit%s" % (m["dq_width"], " (64 data + 8 ECC)"
+                                                                       if m["ecc"] and m["dq_width"] == 72 else ""))
+
+
+def ui_clk_from_polls(polls0, up0, polls1, up1, poll_cyc, aclk_hz=ACLK_HZ):
+    """Measured MIG ui_clk (MHz) from two (polls completed, uptime aclk cycles) samples: the ECC poller finishes one poll
+    every POLL_CYC ui_clk cycles plus its own few AXI-Lite cycles (biases the result low by < 0.05 %). Returns
+    (ui_mhz, dpolls, dt_s); ui_mhz is None when nothing was polled."""
+    dp = (polls1 - polls0) & 0xFFFFFFFF
+    dt = ((up1 - up0) & 0xFFFFFFFFFFFFFFFF) / aclk_hz
+    if dp <= 0 or dt <= 0:
+        return None, dp, dt
+    return poll_cyc * dp / dt / 1e6, dp, dt
+
+
+def ui_clk_precision_pct(dpolls):
+    """+- precision of ui_clk_from_polls: polls reach the aclk side in batches, so each endpoint is uncertain by one
+    poll (2 / dpolls); plus the aclk's own tolerance (the PCIe reference, <= 300 ppm) and the poll overhead (< 0.05 %)."""
+    return round(100.0 * 2 / dpolls + 0.08, 2) if dpolls else None
+
 
 def code2c(k):
     """SYSMONE4 10-bit temperature code -> degrees C (UG580)."""
@@ -561,6 +625,22 @@ def markdown():
           "forwarded, 0x18 reads forwarded, 0x1C refused, 0x20 NWIN, 0x28-0x3C BASE1-3. p2p_alias: 0x00 ID "
           "0x50414C49, 0x04 CTRL [0] enable [8] in force, 0x08/0x0C ALIAS, 0x10 WIN_LOG2, 0x18/0x1C TGT_BASE, "
           "0x20/0x24 writes/reads redirected, 0x28 writes outstanding.", ""]
+    L += ["## MIG configuration per build (`innova2-smi ddr`)", "",
+          "No shell reports its MIG configuration in a register, so innova2-smi keeps this table by ROM_TS (read from "
+          "each build's generated MIG RTL, IP parameters, par XDC, CA-drive gate and create_project log). Timing in "
+          "DDR4 clock cycles; every build's PHY is 4:1, so ui_clk = 1/(4 tCK) and MT/s = 8 x ui_clk. The ui_clk is "
+          "measured passively: the ECC poller completes one poll per POLL_CYC ui_clk cycles (0x2C counts them), "
+          "timed by the 250 MHz uptime counter (0xB0/0xB4); precision about 2/polls + 0.08 %.", "",
+          "| ROM_TS | build | variant | part | tCK ps | MT/s | CL/CWL | tRCD/tRP/tRAS/tRFC | width | ECC | "
+          "InputClockPeriod ps | CA drive | POLL_CYC |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for ts in sorted(MIG_BUILDS):
+        m = mig_config(ts)
+        L.append("| %d | %s | %s | %s | %d | %.0f | %d/%d | %d/%d/%d/%d | %d | %s | %d | %s | %d |" % (
+            ts, SHELLS.get(ts, {}).get("name", "?"), m["variant"], m["part"], m["tck_ps"], m["mts"], m["cl"], m["cwl"],
+            m["trcd"], m["trp"], m["tras"], m["trfc"], m["dq_width"], "on" if m["ecc"] else "off", m["input_clk_ps"],
+            m["ca_drive"], m["poll_cyc"]))
+    L += ["", "Dw8 CSV builds use `%s`. Route V's MIG is in each KEPT xclbin: its row is the template's. Any other "
+          "ROM_TS is an unknown build." % DW8_CSV, ""]
     return "\n".join(L)
 
 

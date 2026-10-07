@@ -583,6 +583,76 @@ def routev(sh):
     return out
 
 
+def poll_sample(sh):
+    """(polls completed, uptime cycles): uptime read before and after the poll count, the midpoint kept (the reads are a
+    few microseconds apart). Loads only."""
+    def up():
+        lo = sh.r(0xB0)
+        return sh.r(0xB4) << 32 | lo                   # UPTIME_HI is latched by the UPTIME_LO read
+    a = up()
+    p = sh.r(0x2C)
+    b = up()
+    return p, (a + b) // 2
+
+
+def ddr_ready_for_rate(sh, regs=None):
+    """(ok, why): the ECC poller polls only while the MIG is calibrated, so the rate is measurable only then."""
+    rd = (lambda o: regs[o]) if regs is not None else sh.r
+    if R.is_routev(sh.lay):
+        i = rd(0x1C0)
+        if not (i & 1):
+            return False, "no DDR in the loaded xclbin (PRUNED)"
+        if not (i >> 1 & 1 and i >> 4 & 1):
+            return False, "DDR KEPT but not calibrated / RP isolated"
+        return True, ""
+    if not rd(0x00) >> 28 & 1:
+        return False, "DDR gate closed (not calibrated or mode off)"
+    if not rd(0x18) >> 29 & 1:
+        return False, "the ECC poller has never polled"
+    return True, ""
+
+
+def rate_result(cfg, ui, dp, dt, routev=False):
+    """The measured rate next to the table value."""
+    out = dict(ui_clk_mhz=round(ui, 3) if ui else None, mts=round(8 * ui, 1) if ui else None, polls=dp,
+               window_s=round(dt, 3), precision_pct=R.ui_clk_precision_pct(dp),
+               formula="ui_clk = POLL_CYC x polls / (uptime cycles / 250 MHz); MT/s = 8 x ui_clk (4:1 PHY, DDR)")
+    if ui and cfg:
+        out["vs_table_pct"] = round(100.0 * (ui - cfg["ui_clk_mhz"]) / cfg["ui_clk_mhz"], 2)
+        out["poll_cyc"] = cfg["poll_cyc"]
+        if routev:
+            out["note"] = "route V: POLL_CYC and the MIG come from the KEPT xclbin; the template's values are assumed"
+    return out
+
+
+def ddr_speed(sh, window=1.5):
+    """The DDR configuration of this build (R.MIG_BUILDS by ROM_TS, or DDR_INFO when the layout has it) and the MIG
+    ui_clk measured passively from the ECC poller's poll count over `window` seconds of the 250 MHz uptime counter."""
+    cfg = R.mig_config(sh.rom_ts)
+    out = dict(table=cfg, table_source="build table (ROM_TS %d)" % sh.rom_ts if cfg else
+               "unknown build (ROM_TS %s): no MIG table" % sh.rom_ts)
+    if sh.obs_id in R.DDR_INFO_MAPS:                   # hook: route V's DDR_INFO block, once its map exists
+        out["ddr_info"] = {n: dec(sh.r(o)) for o, (n, dec) in R.DDR_INFO_MAPS[sh.obs_id]["regs"].items()}
+    ok, why = ddr_ready_for_rate(sh)
+    if not ok:
+        out["measured"] = dict(ui_clk_mhz=None, reason=why)
+        return out
+    if not cfg:
+        out["measured"] = dict(ui_clk_mhz=None, reason="POLL_CYC unknown for an unlisted build")
+        return out
+    ld0 = sh.r(0x10) & 0xFFFF
+    p0, u0 = poll_sample(sh)
+    sh.host.sleep(window)
+    p1, u1 = poll_sample(sh)
+    if (sh.r(0x10) & 0xFFFF) != ld0:
+        out["measured"] = dict(ui_clk_mhz=None, reason="a link-down (MIG reset) during the window; run again")
+        return out
+    ui, dp, dt = R.ui_clk_from_polls(p0, u0, p1, u1, cfg["poll_cyc"])
+    out["measured"] = rate_result(cfg, ui, dp, dt, routev=R.is_routev(sh.lay)) if ui else \
+        dict(ui_clk_mhz=None, reason="no poll completed in %.2f s" % dt)
+    return out
+
+
 def uptime(sh):
     lo = sh.r(0xB0)
     hi = sh.r(0xB4)
