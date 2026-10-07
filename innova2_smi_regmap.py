@@ -24,6 +24,10 @@ ROUTE V (OBS_ID 0x0B5E0008, VBNV innova2_innova2_noddr_202320_3): the DDR4 MIG i
 an xclbin only when its kernels use DDR (KEPT) and pruned otherwise (PRUNED). Its management map is the E7a3 one minus
 the static MIG's ECC master (nothing the tool reads; build gate AMAP), and ddr_health adds a block at 0x1C0..0x1F8
 (KEPT/PRUNED, calibration, per-load ECC, fences while KEPT). EMU/HYBRID are deferred on it (the gate runs on/off).
+
+ROUTE V r2 (OBS_ID 0x0B5E000B, same VBNV, own ROM_TS): the route-V map plus 0x218..0x220 -- fenced DDR accesses split
+by link-down window (FENCE_LDWIN + FENCE_OUTWIN = FENCE), so `check` places a warm reboot's fenced write from the
+registers alone. Its flash image boots with the PRUNED filler as the dynamic region (no MIG until a KEPT xclbin loads).
 """
 
 import math
@@ -53,7 +57,10 @@ SHELLS = {
     1792458000: dict(name="E7a3-2400", obs_id=0x0B5E0006, uuid="5970d74a63e26d3fe4041d0b50f5319f",
                      ddr="DDR4-2400 72-bit ECC (dw8_833)"),
     1792461600: dict(name="E7a3-2666ca48", obs_id=0x0B5E0007, uuid="869cfe845d0b1f79869844ef67a34cd5", ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48"),
-    1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid=None,
+    1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid="5027516c91a681bd01afaf11083d9d60", boot_rm="KEPT template",
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
+    # route V r2: the flash image boots with the PRUNED filler in the dynamic region (no MIG at power-on)
+    1792479600: dict(name="routeV2", obs_id=0x0B5E000B, uuid="af913744c494e27fe46148db9ab1392c", boot_rm="filler",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
 }
 
@@ -189,6 +196,17 @@ _RV = {
     0x210: ("UI_CLK_EDGES", "r", "MIG ui_clk/2^SHIFT rising edges in the last 2^WIN aclk window (0 = no valid window)"),
     0x214: ("UI_CLK_CFG", "r", "[7:0] WIN (log2 aclk cycles) [15:8] SHIFT [16] the last window was valid"),
 }
+# route V r2 (OBS_ID 0x0B5E000B): fenced DDR accesses split by LINK-DOWN WINDOW. A window is open while the link is
+# down, while the link-down MIG reset is active, or -- after a link-down -- while the static waits for recalibration
+# and less than 2 s have passed since the link came back (it ends at RECAL_DONE or at that limit). Every fenced access
+# goes to exactly one of the two counters: FENCE_LDWIN + FENCE_OUTWIN = FENCE (0xA0). CLEAR zeroes all three.
+_RV2 = {
+    0x218: ("FENCE_LDWIN", "r", "fenced DDR accesses INSIDE a link-down window (sat)"),
+    0x21C: ("FENCE_OUTWIN", "r", "fenced DDR accesses OUTSIDE every link-down window (sat)"),
+    0x220: ("FENCE_WIN", "r", "[0] a link-down window is open now [1] link down now [2] link-down MIG reset active "
+                              "[3] waiting for recalibration [4] the window's 2 s limit has run out (or never started) "
+                              "[31:16] the limit in 2^16-aclk units (7629 = 2.0 s)"),
+}
 DDR_KEPT_MAGIC, DDR_NONE_MAGIC = 0xD4D4, 0x0D0D
 CA_CODES = {0: "RDRV_40_40", 1: "RDRV_48_48", 2: "RDRV_60_60"}
 MIG_VARIANTS = {1: "mwrnd833", 2: "dw8_833", 3: "e6b750"}
@@ -250,7 +268,11 @@ LAYOUTS = {
                      regs=_merge(_BASE, _E7, _E7A3)),
     # route V: not yet run on hardware (released=False until the owner's first-hardware session)
     0x0B5E0008: dict(name="route V (E7a3 map + DDR-in-RP block 0x1C0; DDR per xclbin)", e7=True, e7a3=True, mon=False,
-                     released=False, routev=True, regs=_merge(_BASE, _E7, _E7A3, _RV)),
+                     released=True, routev=True, regs=_merge(_BASE, _E7, _E7A3, _RV)),
+    # route V r2: + the fence-window counters; the flash image boots with the PRUNED filler (not yet run on hardware)
+    0x0B5E000B: dict(name="route V r2 (route-V map + fence-window counters 0x218; boot RM = filler)", e7=True,
+                     e7a3=True, mon=False, released=False, routev=True, fencewin=True,
+                     regs=_merge(_BASE, _E7, _E7A3, _RV, _RV2)),
 }
 OBS_ID_OFF, OBS_CLEAR = 0x30, 0xC1EAC1EA
 
@@ -262,6 +284,7 @@ THR_DEFAULTS = {
     0x0B5E0006: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0007: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0008: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E000B: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
 }
 
 
@@ -271,6 +294,11 @@ def layout(obs_id):
 
 def is_routev(lay):
     return bool(lay and lay.get("routev"))
+
+
+def has_fencewin(lay):
+    """route V r2: FENCE_LDWIN / FENCE_OUTWIN (0x218 / 0x21C) exist."""
+    return bool(lay and lay.get("fencewin"))
 
 
 def read_set(obs_id):
@@ -339,6 +367,8 @@ MIG_BUILDS = {
     # in-RP ddr_ecc_poller's POLL_CYC 333000). An xclbin built from another template differs: DDR_INFO will say.
     1792465200: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
                      ca_drive="RDRV_48_48 (template ddr_rp_late.xdc)"),
+    1792479600: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
+                     ca_drive="RDRV_48_48 (template ddr_rp_late.xdc)"),
 }
 # Route V's planned DDR_INFO block (MIG constants + a ui_clk counter, from the template) replaces the table and the poll
 # estimate when its OBS_ID layout lists it: {obs_id: {"regs": {offset: (name, decoder)}}}. Empty until that map exists.
@@ -355,6 +385,7 @@ DDR_INFO_MAPS = {
         0x214: ("ui_clk_cfg", lambda v: "window 2^%d aclk, divider 2^%d, valid %d" % (v & 0xFF, v >> 8 & 0xFF, v >> 16 & 1)),
     }),
 }
+DDR_INFO_MAPS[0x0B5E000B] = DDR_INFO_MAPS[0x0B5E0008]          # route V r2: the same DDR_INFO block
 
 
 def mig_rates(tck_ps, phy_ratio=4):
@@ -576,6 +607,15 @@ COUNTER_FIELDS = [
     (0x1F0, 0, 32, "ts_last_calibration", "s262", "uptime at the last calibration completed"),
     (0x1F4, 0, 32, "ts_last_fence_kept", "s262", "uptime at the last fence while KEPT"),
     (0x1F8, 0, 32, "ts_last_load", "s262", "uptime at the last load settle"),
+    # route V r2
+    (0x218, 0, 32, "fenced_in_link_down_window", "n", "fenced DDR accesses inside a link-down window (sat)"),
+    (0x21C, 0, 32, "fenced_outside_link_down_window", "n", "fenced DDR accesses outside every link-down window (sat)"),
+    (0x220, 0, 1, "fence_window_open", "bool", "a link-down window is open now"),
+    (0x220, 1, 1, "fence_window_link_down", "bool", "the link is down now"),
+    (0x220, 2, 1, "fence_window_mig_reset", "bool", "the link-down MIG reset is active now"),
+    (0x220, 3, 1, "fence_window_waiting_recal", "bool", "waiting for recalibration after a link-down"),
+    (0x220, 4, 1, "fence_window_limit_run_out", "bool", "the window's 2 s limit has run out (or never started)"),
+    (0x220, 16, 16, "fence_window_limit", "s262", "the window's limit after link-up"),
 ]
 for _b, _n in ((0x40, "p2p"), (0x60, "host"), (0x80, "peer")):
     COUNTER_FIELDS += [
@@ -647,7 +687,7 @@ def markdown():
         who = "all" if len(oids) == len(LAYOUTS) else ", ".join("%X" % (x & 0xF) for x in sorted(oids))
         L.append("| 0x%03X | %s | %s | %s | %s |" % (o, name, acc, who, desc.replace("|", "/")))
     L += ["", "Layout column: the last hex digit of the OBS_IDs that decode the offset (1 = full, 2 = E4 layout, "
-          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V).", "",
+          "3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V, B = route V r2).", "",
           "Route V (OBS_ID 0x0B5E0008, VBNV %s): the DDR4 MIG lives in the dynamic region; an xclbin either has "
           "it (KEPT: its kernels use bank0) or not (PRUNED). 0x00-0x198 keep the E7a3 meaning; 0x14-0x2C stay "
           "cumulative since configuration (the in-RP ECC poller sends deltas over the RP boundary) and 0x1D0-0x1E8 "
@@ -656,6 +696,15 @@ def markdown():
           "mode register keeps its 2 bits but the gate runs ON/OFF only: a requested EMU runs ON and HYBRID runs "
           "OFF (EMU/HYBRID deferred). Fences while PRUNED are expected (no DDR), fences while KEPT are counted "
           "at 0x1EC. Recorder types 20 RM_DDR, 21 CAL_DONE, 22 CAL_LOST." % VBNV_ROUTEV, "",
+          "Route V r2 (OBS_ID 0x0B5E000B, same VBNV): the route-V map plus 0x218 FENCE_LDWIN / 0x21C FENCE_OUTWIN / "
+          "0x220 FENCE_WIN. A link-down window is open while the link is down, the link-down MIG reset is active, or "
+          "(after a link-down) the static waits for recalibration and less than 2 s have passed since link-up; it "
+          "closes at RECAL_DONE or at the limit. FENCE_LDWIN + FENCE_OUTWIN = FENCE (0xA0). The r2 flash image boots "
+          "with the PRUNED filler in the dynamic region, so RV_INFO/DDR_INFO read 'no DDR' until a KEPT xclbin loads.",
+          "",
+          "PR_COUNT (0x120) counts RP ISOLATIONS: XRT isolates the RP twice per `xbutil program` (a zero-length "
+          "isolate first, then the reconfiguration), so it rises by 2 per xclbin load. Route V's RV_LOADS (0x1C4) "
+          "counts each load once, 262 us after its release, plus the configuration's own RM at power-on.", "",
           "Units: timestamps are uptime[47:16] (262.144 us); recorder records are 64 bits, [63:58] type "
           "[57:40] payload [39:0] uptime[47:8] (1.024 us). Temperature code to C: code * 509.3140064 / 1024 - "
           "280.2308787.", "",

@@ -102,7 +102,10 @@ RULES = {
                                             "timestamps are judged on count, address and link-down count only. A "
                                             "fence BEFORE the last of several link-downs (hpy440: two link-downs "
                                             "per warm reboot, the fence in the first) needs 'check --recorder': "
-                                            "every FENCE record must then lie in a LINK_DOWN..RECAL_DONE window"),
+                                            "every FENCE record must then lie in a LINK_DOWN..RECAL_DONE window. "
+                                            "Route V r2 (OBS_ID 0x0B5E000B) counts it in hardware: benign when "
+                                            "FENCE_OUTWIN (0x21C) = 0 and FENCE_LDWIN (0x218) = FENCE, from "
+                                            "registers alone, KEPT or PRUNED"),
     "ddr.recorder_unreadable": dict(sev="WARN", hint="check --recorder could not read the flight recorder; the "
                                                      "fenced-access rule fell back to the registers"),
     "ddr.link_down_rising":   dict(sev="WARN", hint="the PCIe link dropped during the check interval"),
@@ -122,6 +125,9 @@ RULES = {
     "ddr.fenced_kept":        dict(sev="FAIL", hint="a host/P2P DDR access was fenced while a KEPT xclbin was loaded: "
                                                     "DDR was not calibrated when it was used; 'innova2-smi clear' after "
                                                     "diagnosis"),
+    "ddr.fenced_outside_window": dict(sev="INFO", hint="route V r2: fenced DDR accesses that no link-down window "
+                                                        "explains (FENCE_OUTWIN > 0); judged by ddr.fenced_kept (FAIL "
+                                                        "when DDR was loaded) / ddr.fenced_pruned (no DDR loaded)"),
     "ddr.fenced_pruned":      dict(sev="INFO", hint="DDR accesses fenced while no DDR was loaded (PRUNED or during a "
                                                     "load): expected, the fence answered instead of hanging"),
     "ddr.cal_lost":           dict(sev="WARN", hint="DDR calibration was lost while a KEPT xclbin was loaded (a "
@@ -253,7 +259,9 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None, recor
         if not released:
             items.append(_item("ddr.rp_isolated", "the dynamic region is isolated", ev_rv))
         elif not kept:
-            items.append(_item("ddr.pruned", "no DDR in this xclbin (PRUNED)", ev_rv))
+            boot = lay.get("e7") and rd(0x120) == 0           # no RP isolation since configuration (or a CLEAR)
+            items.append(_item("ddr.pruned", "no xclbin loaded: the boot RM is the PRUNED filler (no DDR)" if boot
+                               else "no DDR in this xclbin (PRUNED)", dict(ev_rv, pr_isolations=rd(0x120))))
         elif not (cal and gate) and mode_force == "on":
             items.append(_item("ddr.kept_not_calibrated", "the xclbin has DDR (KEPT) but it is %s" % (
                 "not calibrated" if not cal else "fenced (gate closed)"), ev_rv))
@@ -274,6 +282,25 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None, recor
     items += ecc_items(sh, s0, s1, baseline)
     if rv:
         fk, fall = rd(0x1EC), rd(0xA0)
+        if fall and R.has_fencewin(lay):
+            # route V r2: the shell splits every fence by link-down window (0x218 inside, 0x21C outside)
+            fin, fout = rd(0x218), rd(0x21C)
+            a4 = rd(0xA4)
+            evw = dict(fenced_total=fall, inside_link_down_windows=fin, outside_link_down_windows=fout,
+                       fenced_while_kept=fk, link_downs=rd(0x10) & 0xFFFF,
+                       timing="registers: FENCE_LDWIN / FENCE_OUTWIN (route V r2), no recorder needed")
+            if a4 >> 31 & 1:
+                evw["first"] = "%s at 0x%x" % ("read" if a4 >> 30 & 1 else "write", rd(0xAC) << 32 | rd(0xA8))
+            if fout == 0 and fin == fall:
+                items.append(_item("ddr.fenced_linkdown_benign", "%d fenced DDR access%s, all inside link-down windows "
+                                   "(%d link-downs; outside 0)" % (fall, "es" if fall > 1 else "", evw["link_downs"]),
+                                   evw))
+                fk = fall = 0                       # explained: no KEPT / PRUNED item for them
+            else:
+                evw["not_benign"] = "%d fenced access(es) outside every link-down window" % fout if fout else \
+                    "the window counters (%d + %d) do not add up to FENCE (%d)" % (fin, fout, fall)
+                items.append(_item("ddr.fenced_outside_window", "%d fenced DDR access(es) outside link-down windows "
+                                   "(%d inside)" % (fout, fin), evw))
         if fk:
             items.append(_item("ddr.fenced_kept", "%d host/P2P DDR accesses fenced while a KEPT xclbin was loaded" % fk,
                                dict(fenced_while_kept=fk, fenced_total=fall,
@@ -531,7 +558,14 @@ def fence_items(sh, regs, recorder=None):
         why.append("the first fenced access is a read")
     elif addr != rule["address"]:
         why.append("address 0x%x, not 0x%x" % (addr, rule["address"]))
-    if recorder is not None:
+    if R.has_fencewin(sh.lay):
+        # fence-window counters (route V r2 RTL, ported to E7a3 as 0x0B5E000C): the shell placed every fence itself
+        fin, fout = rd(0x218), rd(0x21C)
+        ev.update(inside_link_down_windows=fin, outside_link_down_windows=fout,
+                  timing="registers: FENCE_LDWIN / FENCE_OUTWIN (no recorder needed)")
+        why = [] if fout == 0 and fin == n else \
+            ["%d fenced access(es) outside every link-down window (%d inside, FENCE %d)" % (fout, fin, n)]
+    elif recorder is not None:
         inf, recs = recorder
         wins = fence_windows(recs, rule["threshold"])
         fences = [r["time_s"] for r in recs if r["type"] == "FENCE"]

@@ -43,16 +43,21 @@ _E7A3 = [0xd8, 0xdc, 0x140, 0x144, 0x148, 0x14c, 0x150, 0x154]
 _MON = [0x40, 0x44, 0x48, 0x4c, 0x50, 0x54, 0x60, 0x64, 0x68, 0x6c, 0x70, 0x74, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94]
 # route V (OBS_ID 0x0B5E0008): clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v, 10'h070..10'h07E
 _RV = list(range(0x1c0, 0x1fc, 4)) + list(range(0x200, 0x218, 4))
+# route V r2 (OBS_ID 0x0B5E000B): clkx300fp8c_routev2_src ddr_health.v, + 10'h086..10'h088
+_RV2 = [0x218, 0x21c, 0x220]
 RTL_DECODE = {0x0B5E0002: _BASE, 0x0B5E0004: _BASE + _E7 + _MON, 0x0B5E0005: _BASE + _E7,
-              0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV}
+              0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV,
+              0x0B5E000B: _BASE + _E7 + _E7A3 + _RV + _RV2}
 ROM_TS = {0x0B5E0002: 1792371600, 0x0B5E0004: 1792000004, 0x0B5E0005: 1792281600, 0x0B5E0006: 1792458000,
-          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200}
+          0x0B5E0007: 1792461600, 0x0B5E0008: 1792465200, 0x0B5E000B: 1792479600}
 RV = 0x0B5E0008
+RV2 = 0x0B5E000B
 ROUTEV_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v"
+ROUTEV2_RTL = "/nobackup2/xilinx_shells_work/clkx300fp8c_routev2_src/ip_src/ddr_health/ddr_health.v"
 
 
 def vbnv_of(obs_id):
-    return R.VBNV_ROUTEV if obs_id == RV else R.VBNV_FP8C
+    return R.VBNV_ROUTEV if obs_id in (RV, RV2) else R.VBNV_FP8C
 WRITABLE = {0x30, 0xC0, 0xC4, 0xD8, 0xDC, 0x18C}
 
 
@@ -71,9 +76,9 @@ class Model:
         self.h, self.obs, self.mut = host, obs_id, set(mutants)
         self.decoded = {0x36000 + o for o in RTL_DECODE.get(obs_id, [0x30])} | {0x32000, 0x32008} | \
             set(range(0xA0400, 0xA0800, 4))
-        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV)
-        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV)
-        self.routev = obs_id == RV
+        self.e7 = obs_id in (0x0B5E0004, 0x0B5E0005, 0x0B5E0006, 0x0B5E0007, RV, RV2)
+        self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2)
+        self.routev = obs_id in (RV, RV2)
         # route V model: the loaded xclbin is KEPT (MIG, poller) or PRUNED (filler); calibrated only when KEPT
         self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0)
         self.code = c2(temp_c)
@@ -631,8 +636,9 @@ class StatusTests(unittest.TestCase):
             names = {x["name"] for x in json.loads(o)}
             self.assertIn("ecc_ce", names)
             self.assertIn("lock_losses_icap", names)
-            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV))
-            self.assertEqual("rv_ddr_kept" in names, oid == RV)
+            self.assertEqual("temp_samples" in names, oid in (0x0B5E0006, 0x0B5E0007, RV, RV2))
+            self.assertEqual("rv_ddr_kept" in names, oid in (RV, RV2))
+            self.assertEqual("fenced_outside_link_down_window" in names, oid == RV2)
             self.assertEqual("axi_p2p_write_slverr" in names, oid == 0x0B5E0004)
             self.assertEqual("pr_count" in names, oid != 0x0B5E0002)
             # every register of the layout is dumped
@@ -1436,6 +1442,155 @@ class RouteVTests(unittest.TestCase):
         self.assertEqual(R.REC_TYPES[20], "RM_DDR")
         self.assertIn("PRUNED", R.record_detail(20, 0))
         self.assertIn("ms after the RP release", R.record_detail(21, 100))
+
+
+class RouteV2Tests(unittest.TestCase):
+    """OBS_ID 0x0B5E000B (route V r2): the boot RM is the PRUNED filler; fences split by link-down window (0x218)."""
+    NOXCLBIN = "00000000-0000-0000-0000-000000000000"
+
+    def check(self, h):
+        return C.run_check(h, H.discover(h)[0], interval=1.0)
+
+    def rules(self, r, sev=None):
+        return [i["rule"] for i in r["items"] if sev is None or i["severity"] == sev]
+
+    def boot(self, obs=RV2, pruned=True):
+        h = MockHost(obs)
+        if pruned:
+            h.model.set_pruned()
+        h.attrs_[("0000:08:00.1", "xclbinuuid")] = self.NOXCLBIN
+        h.model.r[0x120] = 0                                 # no RP isolation since configuration
+        return h
+
+    def test_map_against_the_rtl(self):
+        if not os.path.exists(ROUTEV2_RTL):
+            self.skipTest("route-V r2 shell source not on this machine")
+        oid, probs = R.check_rtl(open(ROUTEV2_RTL).read())
+        self.assertEqual((oid, probs), (RV2, []))
+
+    def test_layout(self):
+        lay = R.layout(RV2)
+        self.assertTrue(R.is_routev(lay) and R.has_fencewin(lay))
+        self.assertFalse(R.has_fencewin(R.layout(RV)))
+        self.assertEqual(R.SHELLS[1792479600]["obs_id"], RV2)
+        self.assertEqual("%x" % 1792479600, "6ad71170")
+
+    def test_boot_filler_wording(self):
+        h = self.boot()
+        rc, o, e = run_cli(h, ["list"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("no xclbin (boot RM: filler)", o)
+        self.assertNotIn("xclbin DDR", o)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("DDR (route V)  : no xclbin (boot RM: filler, no DDR)", o)
+        self.assertNotIn("xclbin KEPT", o)
+        self.assertIn("no DDR in the boot RM", o)
+        st = json.loads(run_cli(h, ["status", "--json"])[1])["routev"]
+        self.assertEqual((st["xclbin_loaded"], st["boot_rm"], st["xclbin_ddr"]), (False, "filler", "PRUNED"))
+        r = self.check(h)
+        self.assertNotIn("ddr.kept_not_calibrated", self.rules(r))
+        it = [i for i in r["items"] if i["rule"] == "ddr.pruned"][0]
+        self.assertIn("boot RM is the PRUNED filler", it["message"])
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+
+    def test_boot_kept_template_r1(self):
+        h = self.boot(RV, pruned=False)
+        self.assertIn("no xclbin (boot RM: KEPT template)", run_cli(h, ["list"])[1])
+        self.assertIn("no xclbin (boot RM: KEPT template, MIG in the dynamic region)", run_cli(h, ["status"])[1])
+
+    def test_loaded_xclbin_wording_unchanged(self):
+        h = MockHost(RV2)
+        self.assertIn("xclbin DDR KEPT", run_cli(h, ["list"])[1])
+        h.model.set_pruned()
+        self.assertIn("xclbin PRUNED (no DDR in this xclbin)", run_cli(h, ["status"])[1])
+
+    def test_no_xocl_falls_back_to_pr_count(self):
+        h = self.boot()
+        del h.attrs_[("0000:08:00.1", "xclbinuuid")]
+        st = json.loads(run_cli(h, ["status", "--json"])[1])["routev"]
+        self.assertFalse(st["xclbin_loaded"])
+        self.assertIn("PR_COUNT 0", st["xclbin_loaded_source"])
+        h.model.r[0x120] = 2
+        st = json.loads(run_cli(h, ["status", "--json"])[1])["routev"]
+        self.assertTrue(st["xclbin_loaded"])
+
+    def test_pr_count_is_isolations(self):
+        h = MockHost(RV2)
+        h.model.r[0x120] = 46
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("PR isolations  : 46 (~23 xclbin loads", o)
+        self.assertEqual(json.loads(run_cli(h, ["status", "--json"])[1])["pr"]["xclbin_loads_estimate"], 23)
+        self.assertIn("zero-length isolate", SMI.cmd_status.__doc__)
+
+    def fences(self, h, total, inside, outside, kept=0):
+        h.model.r[0xA0], h.model.r[0x218], h.model.r[0x21C] = total, inside, outside
+        h.model.r[0xA4], h.model.r[0xA8], h.model.r[0xAC] = 1 << 31, 0, 2
+        h.model.r[0x10] = 2                                  # hpy440: two link-downs per warm reboot
+        h.model.rv["fence_kept"] = kept
+
+    def test_fence_inside_windows_is_benign_from_registers(self):
+        for pruned in (False, True):                        # KEPT: the fence in the recalibration window is benign too
+            h = MockHost(RV2)
+            if pruned:
+                h.model.set_pruned()
+            self.fences(h, 1, 1, 0, kept=0 if pruned else 1)
+            r = self.check(h)
+            self.assertIn("ddr.fenced_linkdown_benign", self.rules(r, "INFO"))
+            self.assertNotIn("ddr.fenced_kept", self.rules(r))
+            self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+            it = [i for i in r["items"] if i["rule"] == "ddr.fenced_linkdown_benign"][0]
+            self.assertIn("registers", it["evidence"]["timing"])
+        self.assertEqual(h.model.writes, [], "classification must not store to the recorder index")
+
+    def test_fence_outside_window_is_not_benign(self):
+        h = MockHost(RV2)
+        self.fences(h, 2, 1, 1, kept=1)                      # one outside a window while KEPT: FAIL as before
+        r = self.check(h)
+        self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(r))
+        self.assertIn("ddr.fenced_kept", self.rules(r, "FAIL"))
+        self.assertIn("ddr.fenced_outside_window", self.rules(r))
+        h = MockHost(RV2)
+        h.model.set_pruned()
+        self.fences(h, 3, 0, 3)                              # outside, PRUNED: the r1 INFO
+        r = self.check(h)
+        self.assertIn("ddr.fenced_pruned", self.rules(r, "INFO"))
+        self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(r))
+        h = MockHost(RV2)
+        self.fences(h, 3, 1, 0, kept=1)                      # counters do not add up: never benign
+        self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(self.check(h)))
+
+    def test_mutants_are_caught(self):
+        orig = R.has_fencewin
+        try:
+            R.has_fencewin = lambda lay: False               # mutant: the window counters ignored (r1 rules on r2)
+            h = MockHost(RV2)
+            self.fences(h, 1, 1, 0, kept=1)
+            self.assertIn("ddr.fenced_kept", self.rules(self.check(h), "FAIL"), "mutant not caught")
+            R.has_fencewin = lambda lay: bool(lay and lay.get("routev"))   # mutant: r1 read as r2
+            h = MockHost(RV)
+            h.model.r[0xA0], h.model.rv["fence_kept"] = 1, 1
+            r = self.check(h)                                # 0x218 is not in r1's map: never read, never benign
+            self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(r))
+            self.assertNotIn(0x36218, h.model.reads)
+        finally:
+            R.has_fencewin = orig
+
+    def test_e7a3_port_layout_uses_counters(self):
+        class Sh:
+            lay = dict(R.layout(0x0B5E0007), fencewin=True)  # the E7a3 fence-window port (OBS_ID not yet assigned)
+        regs = {0xA0: 1, 0x10: 2, 0xA4: 1 << 31, 0xA8: 0, 0xAC: 2, 0x218: 1, 0x21C: 0}
+        self.assertEqual(C.fence_items(Sh, regs)[0]["rule"], "ddr.fenced_linkdown_benign")
+        regs.update({0xA0: 2, 0x21C: 1})
+        it = C.fence_items(Sh, regs)[0]
+        self.assertEqual(it["rule"], "ddr.fenced")
+        self.assertIn("outside every link-down window", it["evidence"]["not_benign"])
+
+    def test_r1_fences_unchanged(self):
+        h = MockHost(RV)
+        h.model.r[0xA0], h.model.rv["fence_kept"] = 1, 1
+        r = self.check(h)
+        self.assertIn("ddr.fenced_kept", self.rules(r, "FAIL"))
+        self.assertNotIn("ddr.fenced_linkdown_benign", self.rules(r))
 
 
 # ----------------------------------------------------------------------------------------------- memory banks

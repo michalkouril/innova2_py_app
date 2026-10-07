@@ -1,3 +1,27 @@
+innova2-app (1.3.6) unstable; urgency=medium
+
+  * innova2-smi: route V r2 (OBS_ID 0x0B5E000B, ROM_TS 1792479600 =
+    0x6AD71170, interface uuid af913744c494e27fe46148db9ab1392c). Register
+    map + the fence-window counters 0x218 FENCE_LDWIN, 0x21C FENCE_OUTWIN,
+    0x220 FENCE_WIN (`regmap --check-rtl` matches the r2 ddr_health.v).
+  * check: on r2 a fenced access is INFO ddr.fenced_linkdown_benign when
+    FENCE_OUTWIN = 0 and FENCE_LDWIN = FENCE, from registers alone -- also
+    on hosts with two link-downs per warm reboot and while a KEPT xclbin is
+    loaded. Fences outside a window keep the r1 rules (ddr.fenced_kept FAIL,
+    ddr.fenced_pruned INFO) plus INFO ddr.fenced_outside_window. Any layout
+    flagged fencewin (the E7a3 port) uses the counters too. --recorder stays
+    for older shells.
+  * list/status: with no xclbin loaded, route V says "no xclbin (boot RM:
+    filler)" (r2) or "(boot RM: KEPT template)" (r1) instead of "xclbin
+    KEPT"; XRT's xclbinuuid decides, PR_COUNT = 0 is the fallback. check's
+    ddr.pruned says when the filler is the boot RM.
+  * status: "PR isolations" -- PR_COUNT rises by 2 per xbutil program (XRT
+    isolates once for zero length first); shows ~PR_COUNT/2 xclbin loads
+    and documents it in 'status -h' and the register map.
+  * r1 (0x0B5E0008) marked released, its interface uuid filled in.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Wed, 07 Oct 2026 11:05:00 -0400
+
 innova2-app (1.3.5) unstable; urgency=medium
 
   * innova2-smi check: the one DDR write fenced in a warm reboot's link-down

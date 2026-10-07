@@ -629,7 +629,37 @@ def routev(sh):
     for name, lo, hi in (("first_ce", 0x1DC, 0x1E0), ("first_ue", 0x1E4, 0x1E8)):
         h = sh.r(hi)
         out["ecc_this_load"][name] = R.decode_ffa((h & 0x7FFFFFFF) << 32 | sh.r(lo)) if h >> 31 & 1 else None
+    out.update(rm_state(sh, bool(i & 1)))
+    if R.has_fencewin(sh.lay):
+        w = sh.r(0x220)
+        out["fence_windows"] = dict(inside=sh.r(0x218), outside=sh.r(0x21C), total=sh.r(0xA0), open_now=bool(w & 1),
+                                    link_down_now=bool(w >> 1 & 1), mig_reset_active=bool(w >> 2 & 1),
+                                    waiting_recal=bool(w >> 3 & 1), limit_run_out=bool(w >> 4 & 1),
+                                    limit_s=round((w >> 16) * 65536 / R.ACLK_HZ, 3), raw="0x%08x" % w)
     return out
+
+
+def rm_state(sh, ddr_present):
+    """Route V: is an xclbin loaded, or is the dynamic region still the RM the flash image configured at power-on
+    (the BOOT RM: r1 = the KEPT template, r2 = the PRUNED filler)? XRT's xclbinuuid (user PF, xocl) decides when it is
+    readable (all zeros / empty = nothing loaded); otherwise PR_COUNT (0x120) = 0 means no reconfiguration since
+    configuration -- or since a CLEAR, which zeroes it, hence the source field."""
+    uuid = None
+    if sh.user and sh.host.driver(sh.user) == "xocl":
+        uuid = (sh.host.attr(sh.user, "xclbinuuid") or "").strip() or None
+    pr_count = sh.r(0x120)
+    if uuid is not None:
+        loaded, src = bool(uuid.replace("-", "").strip("0")), "XRT xclbinuuid %s" % uuid
+    else:
+        loaded, src = pr_count != 0, "PR_COUNT %d (no xocl xclbinuuid; a CLEAR zeroes PR_COUNT)" % pr_count
+    kind = "KEPT template" if ddr_present else "filler"
+    known = (R.SHELLS.get(sh.rom_ts) or {}).get("boot_rm")
+    if loaded:
+        label = "xclbin %s" % ("KEPT" if ddr_present else "PRUNED")
+    else:
+        label = "no xclbin (boot RM: %s)" % kind
+    return dict(xclbin_loaded=loaded, xclbin_loaded_source=src, boot_rm=None if loaded else kind,
+                boot_rm_build=known, rm_label=label, pr_isolations=pr_count, xclbin_loads_estimate=pr_count // 2)
 
 
 def poll_sample(sh):
@@ -890,8 +920,13 @@ def pcie(sh):
 
 
 def pr(sh):
+    """PR_COUNT (0x120) counts RP ISOLATIONS, not xclbin loads: XRT isolates the RP twice per `xbutil program` (a
+    zero-length isolate first, then the reconfiguration), so it rises by 2 per load -- loads ~ count / 2."""
     sh.need("e7")
-    return dict(count=sh.r(0x120), last_isolation_ms=sh.r(0x124) / 250e3, rp_released=bool(sh.r(0x128) & 1))
+    n = sh.r(0x120)
+    return dict(count=n, xclbin_loads_estimate=n // 2, last_isolation_ms=sh.r(0x124) / 250e3,
+                rp_released=bool(sh.r(0x128) & 1),
+                note="PR_COUNT counts RP isolations; XRT isolates twice per xclbin load (a zero-length isolate first)")
 
 
 def last_events(sh, now_s):

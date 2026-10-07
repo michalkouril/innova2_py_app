@@ -39,7 +39,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.5"
+VERSION = "1.3.6"
 
 
 def _version():
@@ -124,7 +124,7 @@ def cmd_list(host, args):
                          running_image=H.CX5_IMAGES.get(q.get("oper")) if "oper" in q else None,
                          cx5_query=q, cx5_health=hl, flags=c["flags"],
                          shell=sh.ident(), device_ready=H.xrt_ready(host, c["user"]),
-                         xclbin_ddr=rv["xclbin_ddr"] if rv else None,
+                         xclbin_ddr=rv["xclbin_ddr"] if rv else None, rm=rv["rm_label"] if rv else None,
                          dna=None, dna_note="the shell has no DNA_PORT reader; DNA is readable over JTAG only"))
     if args.json:
         print(H.jdump(rows))
@@ -155,7 +155,8 @@ def cmd_list(host, args):
         if s.get("vbnv"):
             print("        shell %s  ROM_TS %s (%s)  OBS_ID %s  build %s  Device Ready %s%s" % (
                 s["vbnv"], s["rom_ts"], s["rom_ts_hex"], s["obs_id"] or "-", s["build"] or "-", r["device_ready"] or "-",
-                ("  xclbin DDR %s" % r["xclbin_ddr"]) if r["xclbin_ddr"] else ""))
+                ("  %s" % (r["rm"] if r["rm"] and r["rm"].startswith("no xclbin") else "xclbin DDR %s" % r["xclbin_ddr"]))
+                if r["xclbin_ddr"] else ""))
         if s.get("refused") and r["state"] not in ("FLEX", "FPGA_MISSING", "OTHER_XILINX"):
             print("        not read further: %s" % s["refused"])
         for sev, t in r["flags"]:
@@ -270,15 +271,20 @@ def render_status(st):
     rv = st.get("routev")
     if rv:
         # route V: the DDR is part of the loaded xclbin (KEPT) or absent (PRUNED); a closed gate is normal when PRUNED
-        L.append("DDR (route V)  : xclbin %s, %s, %s, XRT calibration bit %d; mode %s (requested %s%s)" % (
-            "KEPT (MIG in the dynamic region)" if rv["ddr_present"] else "PRUNED (no DDR in this xclbin)",
+        if rv.get("xclbin_loaded", True):
+            head = "xclbin %s" % ("KEPT (MIG in the dynamic region)" if rv["ddr_present"] else "PRUNED (no DDR in this xclbin)")
+        else:                       # nothing loaded since power-on: the flash image's own RM (r1 KEPT template, r2 filler)
+            head = "no xclbin (boot RM: %s)" % ("KEPT template, MIG in the dynamic region" if rv["ddr_present"]
+                                                else "filler, no DDR")
+        L.append("DDR (route V)  : %s, %s, %s, XRT calibration bit %d; mode %s (requested %s%s)" % (
+            head,
             ("calibrated" if rv["calibrated"] else "NOT CALIBRATED") if rv["ddr_present"] else "nothing to calibrate",
             "window gate open" if d["gate_open"] else ("window fenced (expected: no DDR)" if not rv["ddr_present"]
                                                        else "WINDOW FENCED"),
             d["xrt_calibration_bit"], d["in_force"], d["requested"],
             "; emu/hybrid deferred on route V" if d["requested"] in R.ROUTEV_DEFERRED_MODES else ""))
-        L.append("  loads        : %d KEPT, %d PRUNED; %d calibrations (%d lost), the last %.1f ms after its load; "
-                 "fenced while KEPT %d; RP %s, ECC poller %s" % (
+        L.append("  loads        : %d KEPT, %d PRUNED (the power-on RM counts once); %d calibrations (%d lost), the last "
+                 "%.1f ms after its load; fenced while KEPT %d; RP %s, ECC poller %s" % (
                      rv["loads_kept"], rv["loads_pruned"], rv["calibrations"], rv["calibrations_lost"],
                      rv["last_calibration_ms"], rv["fenced_while_kept"], "released" if rv["rp_released"] else "ISOLATED",
                      "present" if rv["ecc_poller"] else "absent"))
@@ -290,7 +296,8 @@ def render_status(st):
                                                             di["ca_drive"], di["mig_variant"], di["part_id"],
                                                             di["ui_clk_mhz_measured"], di["ui_clk_mhz_expected"]))
         else:
-            L.append("  DDR config   : %s (DDR_INFO magic %s)" % ("no DDR in this xclbin" if di["no_ddr"] else "not reported",
+            L.append("  DDR config   : %s (DDR_INFO magic %s)" % (("no DDR in this xclbin" if rv.get("xclbin_loaded", True)
+                                                                  else "no DDR in the boot RM") if di["no_ddr"] else "not reported",
                                                                  di["magic"]))
         el = rv["ecc_this_load"]
         L.append("  this load    : ECC %d corrected, %d uncorrectable polls%s, %d polls" % (
@@ -311,9 +318,12 @@ def render_status(st):
         if e[k]:
             L.append("  %s       : %s" % (k.replace("_", " "), R.ffa_str(e[k])))
     ld, fe = d["link_down"], d["fenced"]
-    L.append("link-down      : %d%s; fenced DDR accesses %d%s" % (
+    fw = (rv or {}).get("fence_windows")
+    L.append("link-down      : %d%s; fenced DDR accesses %d%s%s" % (
         ld["count"], ", recalibrated after the last" if ld["recalibrated"] else "", fe["count"],
-        (" (first: %s at 0x%x)" % ("read" if fe["first"]["read"] else "write", fe["first"]["addr"])) if fe["first"] else ""))
+        (" (first: %s at 0x%x)" % ("read" if fe["first"]["read"] else "write", fe["first"]["addr"])) if fe["first"] else "",
+        ("; %d inside link-down windows, %d outside%s" % (fw["inside"], fw["outside"],
+                                                          ", window OPEN now" if fw["open_now"] else "")) if fw else ""))
     for k, s in st["temperature"].items():
         L.append("temperature    : %-9s %6.2f C  %-10s %s" % (k, s["temp_c"], s["state"], s.get("evidence", "")))
     v = st["voltages"]["sysmon"]
@@ -347,8 +357,10 @@ def render_status(st):
         L.append("  ddr_health   : %d correctable, %d non-fatal, %d fatal; LTSSM %s; %d speed/width changes" % (
             q["correctable"], q["nonfatal"], q["fatal"], q["ltssm"], q["changes"]))
     if "pr" in st:
-        L.append("PR loads       : %d, the last isolated %.3f ms, RP %s" % (
-            st["pr"]["count"], st["pr"]["last_isolation_ms"], "released" if st["pr"]["rp_released"] else "ISOLATED"))
+        L.append("PR isolations  : %d (~%d xclbin loads: XRT isolates the RP twice per load, a zero-length isolate "
+                 "first), the last isolated %.3f ms, RP %s" % (
+            st["pr"]["count"], st["pr"]["xclbin_loads_estimate"], st["pr"]["last_isolation_ms"],
+            "released" if st["pr"]["rp_released"] else "ISOLATED"))
     L.append("uptime         : %.1f s since configuration" % st["uptime"]["seconds"])
     pp = st["p2p"]
     L.append("P2P            : %s, BAR %s bytes (max %s); host memory %s" % (
@@ -375,7 +387,13 @@ def render_status(st):
 
 
 def cmd_status(host, args):
-    """One-screen health: identity, clocks, DDR/ECC, temperatures, throttle, PCIe, PR, uptime, P2P, recorder."""
+    """One-screen health: identity, clocks, DDR/ECC, temperatures, throttle, PCIe, PR, uptime, P2P, recorder.
+
+PR isolations (PR_COUNT, 0x120) count RP isolations, not xclbin loads: XRT isolates the dynamic region twice per
+'xbutil program' (a zero-length isolate first, then the reconfiguration), so the count rises by 2 per load and
+xclbin loads ~ PR_COUNT / 2. Route V's 'loads' line (RV_LOADS, 0x1C4) counts each load once, plus the RM the flash
+image configured at power-on. Route V: until an xclbin is loaded the dynamic region holds that power-on BOOT RM
+(r1: the KEPT template, r2: the PRUNED filler); list/status then say 'no xclbin (boot RM: ...)'."""
     if args.concerns:
         return cmd_check(host, args)
     card, sh = open_card(host, args, need_shell=False)
@@ -1010,7 +1028,8 @@ def build_parser():
     q.add_argument("--rules", action="store_true", help="print the rules table and exit")
     q.add_argument("--recorder", action="store_true",
                    help="when DDR accesses were fenced, read the flight recorder (stores to its index register; no "
-                        "longer strictly passive) to place every fence in a link-down window")
+                        "longer strictly passive) to place every fence in a link-down window. Not needed on route V "
+                        "r2 (OBS_ID 0x0B5E000B): its FENCE_LDWIN / FENCE_OUTWIN counters place them from registers")
     q = add("ecc-baseline", cmd_ecc_baseline, "record ECC counts now; 'check' then judges only new errors")
     g = q.add_mutually_exclusive_group()
     g.add_argument("--show", action="store_true", help="print the stored baseline")
