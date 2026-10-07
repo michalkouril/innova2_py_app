@@ -154,6 +154,7 @@ health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, X
 | `innova2-smi list` | every card: ConnectX-5 BDFs and serial, FPGA functions, FPGA state, the image the ConnectX reports, shell (VBNV, ROM_TS, OBS_ID, build), XRT Device Ready |
 | `innova2-smi status [-d CARD]` | one screen: identity and board check, clocks, DDR mode/calibration/ECC (first-fail decoded), link-downs, fenced accesses, every temperature source (LIVE / STALE / UNRELIABLE), voltages, throttle, PCIe, PR count, uptime, P2P / PEER windows / PLRAM alias, the last flight-recorder records |
 | `innova2-smi check [-d CARD\|--all]` | passive, concerns only: one line per WARN/FAIL with evidence and a hint, or `OK: no concerns`. Exit 0 OK, 1 WARN, 2 FAIL (for cron). `--interval S` (default 1) takes two snapshots for rates; `--since-boot` takes one; `-v` adds the known-benign INFO items; `--rules` prints the rules table. `status --concerns` is an alias. |
+| `innova2-smi ecc-baseline [-d CARD] [--show\|--remove]` | records each card's ECC counts (CE, UE polls), link-down count and FPGA uptime in `~/.cache/innova2-smi/ecc_baseline_<mgmt BDF>.json` (host-side; the card is only read). From then on `check` judges only the errors **since** the baseline -- a new UE is a FAIL again, a new CE a WARN -- and shows the totals as INFO. Used only for the same card, shell and configuration: a cold boot or reflash voids it (reported as INFO, totals judged again). See "ECC after a warm reboot" below |
 | `innova2-smi ddr [-d CARD] [--window S]` | DDR calibration and mode, the build's MIG parameters (a per-build table keyed by ROM_TS, from the build reports: no shell reports its MIG configuration; listed in `docs/innova2_smi_regmap.md`), the MIG ui_clk **measured** passively from the ECC poller's poll count against the 250 MHz uptime counter (ui_clk = POLL_CYC x polls / time; MT/s = 8 x ui_clk at the 4:1 PHY; precision about 2/polls + 0.08 %, i.e. +-0.2 % over the default 1.5 s), and the ECC totals. `status` has a one-line summary; `check` WARNs (`ddr.rate_mismatch`) when the measured rate is more than 1 % (plus the precision) off the table. Shells without ddr_health: "not available on this shell" |
 | `innova2-smi memory [-d CARD]` | every memory bank of the loaded xclbin (bank0/DDR, PLRAM0..2, HOST, PEER): tag, type, base, size, `used`, the CU arguments on it, whether it is ready (DDR calibrated, RP released, host memory reserved, P2P on) and its prune state. PRUNED is shown only where it can be verified (route V's DDR, from the shell's RV_INFO); an unused PLRAM/HOST/PEER bank is `unused (may be pruned)`, because the prune hooks put no marker in the xclbin (see `docs/innova2_smi_prune_marker.md`). Passive: xocl's sysfs copies of mem_topology / ip_layout / connectivity, no XRT context. Also part of `status`; `check` FAILs a used bank that is not ready |
 | `innova2-smi counters [-d CARD] [--watch N]` | every counter and register the running shell exposes, from its OBS_ID map, plus SYSMON, XRT's clock wizards and frequency counters, the cmc sensors, the PEER/alias counters and AER; `--watch` shows deltas |
@@ -180,6 +181,29 @@ takes `--json`. `innova2-smi <command> -h` documents each command.
   points it back afterwards.
 * `check` is strictly passive: loads only (not even the recorder's index register), sysfs, the xrt-smi device
   table. It never opens an XRT context, so it can run while kernels and DMA run.
+
+**ECC after a warm reboot.** The shell's ECC counters are cumulative since configuration and cannot be cleared
+from the host. A warm reboot drops the PCIe link, and the link-down MIG reset loses the DDR contents; reading a
+buffer that was filled before the reboot (a stale-data read) then gives UEs and CEs that stay counted until a cold
+boot. `check` therefore judges UEs against a *clean point* -- the configuration, or an `ecc-baseline` taken later:
+
+| UEs since the clean point | check |
+|---|---|
+| no link-down since the clean point | FAIL `ddr.ue` (DDR content has not been reset since: not stale data) |
+| link-down(s) since, the last UE after the last link-down (E7 event timestamps) | WARN `ddr.ue_stale`: likely stale-data reads after warm reboot; re-fill and `ecc-baseline`, or cold-boot to clear |
+| the last UE before the only link-down since | FAIL `ddr.ue` (no MIG reset preceded them) |
+| the last UE before the last of several link-downs, or a shell without event timestamps (E6b layout) | WARN `ddr.ue_unclassified`: the shell cannot tell stale from fresh; `innova2-smi recorder` shows each ECC_UE / LINK_DOWN record |
+| none since an `ecc-baseline` | INFO `ddr.ue_baselined` (the totals) |
+
+The shell records no host fills, so a stale-data verdict is never better than WARN. The usual sequence after a warm
+reboot that read stale data: re-fill the buffers, `innova2-smi ecc-baseline`, and from then on `check` FAILs on any
+new UE.
+
+**Interface uuid.** `status` shows the interface uuid read passively from xocl's sysfs `interface_uuids` (xclmgmt's
+as a fallback) -- a print of the device tree the driver already holds, no XRT context. XRT 2.17 answers EINVAL there
+for these shells (their device tree has no interface_uuid property), so the next source is the header
+(m_interface_uuid) of the boot xsabin xclmgmt loaded for the card's ROM_TS. The per-build table is only a
+cross-check; a disagreement is a WARN (`identity.uuid_mismatch`). With no source it shows the table value and says so.
 
 **Card states.** `OUR_SHELL` (full status), `OUR_SHELL_OLD` (a pre-fp8c shell: identity only),
 `OUR_SHELL_UNREADABLE` (a shell device whose BAR, driver, ROM or OBS_ID check failed; the failing step is

@@ -442,6 +442,33 @@ def select_card(cards, want):
 
 
 # ----------------------------------------------------------------------------------------------- identification
+def _norm_uuid(u):
+    u = u.strip().lower().replace("-", "")
+    return u if re.fullmatch(r"[0-9a-f]{32}", u) else None
+
+
+def live_interface_uuids(host, card, rom_ts=None):
+    """The interface uuid(s) of the running shell -- PASSIVE: xocl's `interface_uuids` is a print of the device tree
+    it already holds (no XRT context, no MMIO); xclmgmt's is the fallback (it reloads its device tree only when it has
+    none, which a Device-Ready shell always has). XRT 2.17 answers EINVAL on both for these shells (no interface_uuid
+    property in their device tree: measured on hpz440, E7a3-2666ca48), so the last source is the m_interface_uuid of
+    the boot xsabin xclmgmt loaded for this card's ROM_TS (a file header read). Returns ([uuid, ...], source) or
+    ([], None)."""
+    for bdf, drv, src in ((card.get("user"), "xocl", "xocl sysfs"), (card.get("mgmt"), "xclmgmt", "xclmgmt sysfs")):
+        if not bdf or host.driver(bdf) != drv:
+            continue
+        v = host.attr(bdf, "interface_uuids")
+        uu = [x for x in (_norm_uuid(l) for l in (v or "").splitlines()) if x]
+        if uu:
+            return uu, src
+    if rom_ts:
+        x = "/lib/firmware/xilinx/10ee-%s-4351-%016x.xsabin" % (R.FPGA_MGMT_DEV[2:], rom_ts)
+        hdr = R.xclbin_header(host.file_head(x, 512) or b"")
+        if hdr and hdr["rom_ts"] == rom_ts and _norm_uuid(hdr["interface_uuid"]) and hdr["interface_uuid"].strip("0"):
+            return [hdr["interface_uuid"]], "boot xsabin header"
+    return [], None
+
+
 class Shell:
     """A running fp8c shell, identified step by step. `io` is the mgmt BAR0, `uio` the user BAR0, both guarded.
     The first failing step stops identification: nothing past it is read (an unmapped read can hang the host)."""
@@ -452,6 +479,7 @@ class Shell:
         self.ok, self.reason, self.warnings, self.steps = False, None, [], []
         self.state = None
         self.vbnv = self.rom_ts = self.obs_id = self.lay = self.name = None
+        self.uuid_live, self.uuid_source, self.uuid_warning = [], None, None
         self.guard, self.uguard = Guard(), Guard()
         self.io = self.uio = None
 
@@ -491,6 +519,12 @@ class Shell:
         self.vbnv, self.rom_ts = vbnv, int(ts)
         known = R.SHELLS.get(self.rom_ts)
         self.name = known["name"] if known else None
+        self.uuid_live, self.uuid_source = live_interface_uuids(h, self.card, self.rom_ts)
+        tab = (known or {}).get("uuid")
+        if self.uuid_live and tab and tab not in self.uuid_live:
+            self.uuid_warning = ("interface uuid from %s is %s, but this tool's table has %s for %s (ROM_TS %d): "
+                                 "the installed platform and the flashed shell may differ" % (
+                                     self.uuid_source, self.uuid_live[0], tab, known["name"], self.rom_ts))
         if self.vbnv == R.VBNV_OLD:
             self.state = "OUR_SHELL_OLD"
             self._step("platform", False, "pre-fp8c shell %s: no ddr_health map; identity only" % self.vbnv)
@@ -529,6 +563,19 @@ class Shell:
         self.ok, self.state, self.reason = True, "OUR_SHELL", None
         return self
 
+    def uuid_info(self):
+        """The interface uuid: the live one (xocl/xclmgmt sysfs) when readable, else the table's; and how they agree."""
+        tab = (R.SHELLS.get(self.rom_ts) or {}).get("uuid")
+        live = self.uuid_live[0] if self.uuid_live else None
+        if live and tab:
+            match = "match" if tab in self.uuid_live else "MISMATCH"
+        elif live:
+            match = "not in table"
+        else:
+            match = "table only" if tab else None
+        return dict(interface_uuid=live or tab, interface_uuid_source=self.uuid_source if live else ("table" if tab else None),
+                    interface_uuid_table=tab, interface_uuid_check=match)
+
     def need(self, feature):
         if not self.ok:
             raise Refused(self.reason or "shell not identified")
@@ -545,8 +592,9 @@ class Shell:
                     rom_ts_hex="0x%08x" % self.rom_ts if self.rom_ts else None, build=self.name,
                     obs_id="0x%08X" % self.obs_id if self.obs_id is not None else None,
                     layout=self.lay["name"] if self.lay else None,
-                    interface_uuid=(R.SHELLS.get(self.rom_ts) or {}).get("uuid"),
-                    supported=self.ok, refused=self.reason, warnings=self.warnings, steps=self.steps)
+                    **self.uuid_info(),
+                    supported=self.ok, refused=self.reason, steps=self.steps,
+                    warnings=self.warnings + ([self.uuid_warning] if self.uuid_warning else []))
 
 
 # ----------------------------------------------------------------------------------------------- collectors
@@ -1265,6 +1313,72 @@ def counter_deltas(prev, cur):
         if isinstance(a, (int, float)) and isinstance(b, (int, float)) and not isinstance(b, bool) and a != b:
             out[k] = round(b - a, 6)
     return out
+
+
+# ----------------------------------------------------------------------------------------------- ECC baseline
+# The ECC counters (0x14 CE, 0x18 UE polls) are cumulative since configuration and NOT host-clearable (OBS_ID CLEAR
+# leaves 0x00-0x2C alone). After a warm reboot, reads of pre-reboot buffers (whose contents the link-down MIG reset
+# lost) count as UEs/CEs that then stay until a cold boot. `innova2-smi ecc-baseline` records the counts here, on the
+# host, so `check` judges only what happened after it. One file per card (mgmt BDF), valid only for the same
+# configuration: the 250 MHz uptime never goes backwards and the counters never fall within one configuration.
+def ecc_baseline_path(sh):
+    return os.path.join(state_dir(), "ecc_baseline_%s.json" % sh.mgmt.replace(":", "_"))
+
+
+def ecc_baseline_snapshot(sh):
+    up = uptime(sh)
+    ue = sh.r(0x18)
+    d = dict(mgmt=sh.mgmt, serial=board_id(sh.host, sh.card).get("SN"), rom_ts=sh.rom_ts, obs_id=sh.obs_id,
+             build=sh.name, ce=sh.r(0x14), ue_polls=ue & 0xFFFF, ue_seen=bool(ue >> 31 & 1),
+             link_down=sh.r(0x10) & 0xFFFF, uptime_cycles=up["cycles"], uptime_s=round(up["seconds"], 3),
+             host_boot_id=sh.host.boot_id(), written_at=time.time())
+    return d
+
+
+def save_ecc_baseline(sh):
+    d = ecc_baseline_snapshot(sh)
+    path = ecc_baseline_path(sh)
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    return path, d
+
+
+def load_ecc_baseline(sh):
+    """(path, baseline dict or None, why-not-usable or None). Never raises on a bad file: a baseline that cannot be
+    trusted is reported and ignored, so check falls back to the totals."""
+    path = ecc_baseline_path(sh)
+    if not os.path.exists(path):
+        return path, None, None
+    try:
+        with open(path) as f:
+            d = json.load(f)
+        for k in ("rom_ts", "obs_id", "ce", "ue_polls", "link_down", "uptime_cycles"):
+            int(d[k])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return path, None, "unreadable (%s)" % e
+    return path, d, None
+
+
+def baseline_usable(sh, b, regs, sn=None):
+    """None if baseline `b` belongs to this configuration of this shell (board serial `sn`), else why it does not."""
+    up = regs.get(0xB4, 0) << 32 | regs.get(0xB0, 0)
+    if b.get("mgmt") not in (None, sh.mgmt):
+        return "taken on %s, this card is %s" % (b.get("mgmt"), sh.mgmt)
+    if b.get("serial") and sn and b["serial"] != sn:
+        return "taken on board %s, this board is %s" % (b["serial"], sn)
+    if b["rom_ts"] != sh.rom_ts or b["obs_id"] != sh.obs_id:
+        return "taken on another shell (ROM_TS %s, OBS_ID 0x%08X)" % (b["rom_ts"], b["obs_id"])
+    if up < b["uptime_cycles"]:
+        return "taken in an earlier configuration (FPGA uptime %.1f s then, %.1f s now: reconfigured / cold boot)" % (
+            b["uptime_cycles"] / (regs.get(0xB8) or 250e6), up / (regs.get(0xB8) or 250e6))
+    if regs.get(0x14, 0) < b["ce"] or (regs.get(0x18, 0) & 0xFFFF) < b["ue_polls"] or \
+            (regs.get(0x10, 0) & 0xFFFF) < b["link_down"]:
+        return "the counters are below the baseline's (reconfigured since)"
+    return None
 
 
 # ----------------------------------------------------------------------------------------------- simulate-hot

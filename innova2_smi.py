@@ -39,7 +39,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.2"
+VERSION = "1.3.4"
 
 
 def _version():
@@ -204,6 +204,37 @@ def collect_status(host, card, sh):
     return st
 
 
+def uuid_str(i):
+    """'<uuid> (<source>; table <agreement>)' -- the live sysfs value first, the table only as a cross-check."""
+    u, src, chk = i.get("interface_uuid"), i.get("interface_uuid_source"), i.get("interface_uuid_check")
+    if not u:
+        return "- (not in sysfs, not in this tool's table)"
+    if src == "table":
+        return "%s (from this tool's table; sysfs interface_uuids not readable)" % u
+    if chk == "match":
+        return "%s (%s; table agrees)" % (u, src)
+    if chk == "MISMATCH":
+        return "%s (%s) -- WARN: table has %s" % (u, src, i.get("interface_uuid_table"))
+    return "%s (%s; build not in this tool's table)" % (u, src)
+
+
+def thr_effect(t):
+    """What the throttle is doing NOW, unambiguously: 'FULL (not throttled)' or the tier/FORCE and its level."""
+    if not t["enabled"]:
+        return "FULL (not throttled: the throttle is disabled)"
+    if t["force"]:
+        return "FORCE 1/%d (throttled; FORCE bypasses the temperature tiers)" % t["force_level"]
+    if "tier2" in t:
+        tier = t["tier_in_effect"]
+        if tier == "FULL" and not t["requested"]:
+            return "FULL (not throttled)"
+        return "%s (throttled to 1/%d%s)" % (tier.replace("tier ", "T"), t["level_now"],
+                                             ", fail-safe: temperature STALE" if t["failsafe_engaged"] else "")
+    if t["requested"]:
+        return "throttled to 1/%d (over temperature)" % t["force_level"]
+    return "FULL (not throttled)"
+
+
 def render_status(st):
     L = []
     c, i = st["card"], st["identity"]
@@ -211,8 +242,7 @@ def render_status(st):
     L.append("card %d: ConnectX-5 %s, switch %s, state %s" % (c["index"], ",".join(c["cx5"]), c["switch"], c["state"]))
     L.append("board          : " + H.board_summary(b))
     L.append("shell          : %s, ROM_TS %s (%s), OBS_ID %s (%s), interface uuid %s" % (
-        i.get("build") or "?", i.get("rom_ts"), i.get("rom_ts_hex"), i.get("obs_id"), i.get("layout"),
-        i.get("interface_uuid") or "-"))
+        i.get("build") or "?", i.get("rom_ts"), i.get("rom_ts_hex"), i.get("obs_id"), i.get("layout"), uuid_str(i)))
     for w in i.get("warnings", []):
         L.append("  *** %s" % w)
     for sev, t in c.get("flags", []):
@@ -291,18 +321,19 @@ def render_status(st):
         v["vccint"]["v"], v["vccaux"]["v"], v["vccbram"]["v"], st.get("fan_rpm")))
     if "throttle" in st:
         t = st["throttle"]
+        L.append("throttle       : %s; in effect: %s%s" % (
+            fmt_bool(t["enabled"], "enabled", "DISABLED"), thr_effect(t),
+            ("; temperature tier %s, stale %s, fail-safe %s" % (
+                t["temperature_tier"], t["stale"],
+                "ENGAGED" if t["failsafe_engaged"] else ("on" if t["failsafe_enabled"] else "OFF"))) if "tier2" in t else ""))
+        L.append("  FORCE        : %s (force level if enabled: 1/%d)" % ("ON" if t["force"] else "off", t["force_level"]))
         if "tier2" in t:
-            L.append("throttle       : %s%s, tier in effect %s (temperature tier %s), level now 1/%d; stale %s, "
-                     "fail-safe %s" % (fmt_bool(t["enabled"], "enabled", "DISABLED"), ", FORCE ON" if t["force"] else "",
-                                       t["tier_in_effect"], t["temperature_tier"], t["level_now"], t["stale"],
-                                       "engaged" if t["failsafe_engaged"] else ("on" if t["failsafe_enabled"] else "OFF")))
-            L.append("  tiers        : tier 1 (1/%d) on %.2f / off %.2f C; tier 2 (1/%d) on %.2f / off %.2f C" % (
+            L.append("  auto tiers   : T1=1/%d on %.2f / off %.2f C; T2=1/%d on %.2f / off %.2f C" % (
                 t["tier1_level"], t["tier1"]["on_c"], t["tier1"]["off_c"], t["tier2_level"], t["tier2"]["on_c"],
                 t["tier2"]["off_c"]))
         else:
-            L.append("throttle       : %s%s, level 1/%d, on %.2f / off %.2f C" % (
-                fmt_bool(t["enabled"], "enabled", "DISABLED"), ", FORCE ON" if t["force"] else "", t["force_level"],
-                t["tier1"]["on_c"], t["tier1"]["off_c"]))
+            L.append("  auto         : one tier at the FORCE level (1/%d) on %.2f / off %.2f C" % (
+                t["force_level"], t["tier1"]["on_c"], t["tier1"]["off_c"]))
         L.append("  now          : %.2f C (code %d), requested %s, DATA_CLK %s, KERNEL_CLK %s; %d starts, %.3f s "
                  "throttled" % (t["temp_c"], t["code"], t["requested"], "THROTTLED" if t["data_clk_throttled"] else "full",
                                 "THROTTLED" if t["kernel_clk_throttled"] else "full", t["events"], t["time_throttled_s"]))
@@ -504,6 +535,60 @@ def cmd_check(host, args):
     return max(C.SEV_ORDER[r["severity"]] for r in res)
 
 
+# ----------------------------------------------------------------------------------------------- ecc-baseline
+def cmd_ecc_baseline(host, args):
+    """Record each card's ECC counts (CE, UE polls), link-down count and FPGA uptime in
+    ~/.cache/innova2-smi/ecc_baseline_<mgmt BDF>.json. From then on 'check' judges only the errors SINCE the
+    baseline (a new UE is a FAIL again, a new CE a WARN) and shows the totals as INFO. The ECC counters themselves
+    are cumulative since configuration and cannot be cleared from the host; take a baseline after a warm reboot that
+    read stale pre-reboot data, once the buffers have been re-filled. Host-side only: the card is only READ.
+    A baseline is used only for the same card, shell and configuration (a cold boot or reflash voids it).
+    --show prints the stored baseline; --remove deletes it."""
+    cs = cards(host, args)
+    if not cs:
+        raise H.Refused("no Innova-2 card found")
+    sel = cs if (args.device is None and len(cs) > 1) else [H.select_card(cs, args.device)]
+    rows, rc = [], 0
+
+    def say(text):
+        if not args.json:
+            print(text)
+    for c in sel:
+        sh = H.Shell(host, c)
+        if c["state"] == "OUR_SHELL?":
+            sh.identify()
+            c["state"] = sh.state
+        who = "card %s (FPGA %s, %s)" % (c["index"], c.get("mgmt") or "-", sh.name or c["state"])
+        if not sh.ok:
+            rows.append(dict(card=c["index"], error=sh.reason or c["state"]))
+            print("%s: no baseline: %s" % (who, sh.reason or c["state"]), file=sys.stderr)
+            rc = 1
+            continue
+        if args.remove:
+            path = H.ecc_baseline_path(sh)
+            existed = os.path.exists(path)
+            if existed:
+                os.remove(path)
+            rows.append(dict(card=c["index"], file=path, removed=existed))
+            say("%s: %s %s" % (who, "removed" if existed else "no baseline at", path))
+            continue
+        if args.show:
+            path, b, why = H.load_ecc_baseline(sh)
+            rows.append(dict(card=c["index"], file=path, baseline=b, error=why))
+            say("%s: %s" % (who, ("%s: %s" % (path, why)) if why else ("no baseline (%s)" % path) if not b else
+                              "%s: CE %d, UE polls %d, link-downs %d at FPGA uptime %.1f s (%s)" % (
+                                  path, b["ce"], b["ue_polls"], b["link_down"], b["uptime_s"],
+                                  time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(b.get("written_at", 0))))))
+            continue
+        path, b = H.save_ecc_baseline(sh)
+        rows.append(dict(card=c["index"], file=path, baseline=b))
+        say("%s: baseline %s: CE %d, UE polls %d, link-downs %d at FPGA uptime %.1f s -- 'check' now counts only "
+              "ECC errors after this" % (who, path, b["ce"], b["ue_polls"], b["link_down"], b["uptime_s"]))
+    if args.json:
+        print(H.jdump(rows if len(rows) > 1 else rows[0]))
+    return rc
+
+
 # ----------------------------------------------------------------------------------------------- counters
 def render_counters(cs, deltas=None):
     L = ["%-11s %-22s %-16s %-7s %-36s %-12s %14s %-4s %s" % ("region", "offset", "register", "field", "name", "raw",
@@ -607,7 +692,11 @@ class _Stop(Exception):
 
 def _thr_line(sh):
     st = sh.r(0xC8)
-    tier = (" tier %s level 1/%d," % (R.TIER_NAMES[st >> 4 & 3], R.lvl(st >> 8))) if sh.lay["e7a3"] else ""
+    if sh.lay["e7a3"]:
+        tier = (" in effect %s (not throttled)," % R.TIER_NAMES[st >> 4 & 3] if not st >> 1 & 1 else
+                " in effect %s at 1/%d," % ("FORCE" if sh.r(0xC0) >> 1 & 1 else R.TIER_NAMES[st >> 4 & 3], R.lvl(st >> 8)))
+    else:
+        tier = ""
     return "%.2f C (code %d),%s requested %d, DATA_CLK %s, KERNEL_CLK %s (THR_STATUS 0x%08x)" % (
         R.code2c(st >> 16 & 0x3FF), st >> 16 & 0x3FF, tier, st >> 1 & 1, "throttled" if st >> 2 & 1 else "full",
         "throttled" if st >> 3 & 1 else "full", st)
@@ -918,6 +1007,10 @@ def build_parser():
                    help="the DDR mode this card should be in (default on; '' = any)")
     q.add_argument("-v", "--verbose", action="store_true", help="also show INFO (known benign) items")
     q.add_argument("--rules", action="store_true", help="print the rules table and exit")
+    q = add("ecc-baseline", cmd_ecc_baseline, "record ECC counts now; 'check' then judges only new errors")
+    g = q.add_mutually_exclusive_group()
+    g.add_argument("--show", action="store_true", help="print the stored baseline")
+    g.add_argument("--remove", action="store_true", help="delete the stored baseline (check judges the totals again)")
     q = add("ddr", cmd_ddr, "DDR configuration, measured speed and ECC totals")
     q.add_argument("--window", type=float, default=1.5, help="measurement window in seconds (default 1.5; the "
                                                               "precision is about 2/(1000 x window) + 0.08 %%)")

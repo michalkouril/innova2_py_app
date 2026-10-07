@@ -799,6 +799,17 @@ CONCERNS = [
     ("simulate-hot leftover", lambda h: wfile(os.path.join(H.state_dir(), "throttle_saved_0000_08_00.0.json"), "{}"),
      "thr.state_file", "WARN"),
 ]
+def _warm_stale(h):
+    """A warm reboot (link-down at FPGA uptime 50 s), then reads of pre-reboot data: 2 UE polls + 87 CE at 80 s."""
+    m = h.model
+    m.r[0x10] = 0x00050001                                  # 1 link-down, recalibrated, link up
+    m.r[0xE0] = int(50 / R.TS_S)
+    m.r[0x18] = 0xE0000002
+    m.r[0x14] = 87
+    m.r[0xEC] = m.r[0xE8] = int(80 / R.TS_S)
+
+
+CONCERNS.append(("UE after a warm reboot", _warm_stale, "ddr.ue_stale", "WARN"))
 AXI_CONCERN = ("axi monitor", _reg(0x40, 0x00010000), "axi.monitor", "WARN")
 
 
@@ -968,7 +979,7 @@ class SimulateHotTests(unittest.TestCase):
         finally:
             SMI.time = orig
         self.assertEqual(rc, 0, o + e)
-        self.assertIn("tier tier 2", o)
+        self.assertIn("in effect tier 2 at 1/4", o)
         self.assertIn("released", o)
         self.assertIn("THR_TIER", o)
         self.assertEqual({o_: h.model.r[o_] for o_ in before}, before)
@@ -1040,6 +1051,256 @@ class CliTests(unittest.TestCase):
         if os.path.exists(doc):
             self.assertEqual(open(doc).read().rstrip("\n"), R.markdown().rstrip("\n"),
                              "docs/innova2_smi_regmap.md is stale: regenerate with 'innova2-smi regmap --markdown'")
+
+
+# ----------------------------------------------------------------------------------------------- 1.3.4
+def _fpga_ts(h):
+    """The model's FPGA uptime now, in seconds (it starts at 120 s)."""
+    return h.model.now() + 120.0
+
+
+def _new_ue(h, n=1):
+    h.model.r[0x18] = (h.model.r[0x18] & ~0xFFFF) | 1 << 31 | ((h.model.r[0x18] & 0xFFFF) + n)
+    h.model.r[0xEC] = int(_fpga_ts(h) / R.TS_S)
+
+
+def _warm_again(h):
+    h.model.r[0x10] += 1
+    h.model.r[0xE0] = int(_fpga_ts(h) / R.TS_S)
+
+
+def _baseline(h):
+    rc, o, e = run_cli(h, ["ecc-baseline"])
+    assert rc == 0, e
+    h.sleep(5.0)
+
+
+def _setup(*fns):
+    def f(h):
+        for fn in fns:
+            fn(h)
+    return f
+
+
+# (description, OBS_ID, setup, expected rule, its severity, the card's overall severity)
+ECC_SCENARIOS = [
+    ("cold, UE (no link-down)", 0x0B5E0007, _setup(lambda h: _new_ue(h, 2)), "ddr.ue", "FAIL", "FAIL"),
+    ("warm reboot, stale UE after it", 0x0B5E0007, _warm_stale, "ddr.ue_stale", "WARN", "WARN"),
+    ("UE before the only link-down", 0x0B5E0007,
+     _setup(lambda h: _new_ue(h, 2), lambda h: h.sleep(3), _warm_again), "ddr.ue", "FAIL", "FAIL"),
+    ("UE before the last of several link-downs", 0x0B5E0007,
+     _setup(_warm_again, lambda h: h.sleep(1), lambda h: _new_ue(h), lambda h: h.sleep(3), _warm_again),
+     "ddr.ue_unclassified", "WARN", "WARN"),
+    ("E6b layout (no timestamps), UE with a link-down", 0x0B5E0002,
+     _setup(_reg(0x10, 1), _reg(0x18, 0xE0000002)), "ddr.ue_unclassified", "WARN", "WARN"),
+    ("stale UE acknowledged by a baseline", 0x0B5E0007, _setup(_warm_stale, _baseline), "ddr.ue_baselined", "INFO",
+     "OK"),
+    ("UE after the baseline", 0x0B5E0007, _setup(_warm_stale, _baseline, lambda h: _new_ue(h)), "ddr.ue", "FAIL",
+     "FAIL"),
+    ("CE after the baseline", 0x0B5E0007, _setup(_warm_stale, _baseline, _reg(0x14, 90)), "ddr.ce", "WARN", "WARN"),
+    ("warm reboot after the baseline, then a UE", 0x0B5E0007,
+     _setup(_warm_stale, _baseline, _warm_again, lambda h: h.sleep(1), lambda h: _new_ue(h)), "ddr.ue_stale", "WARN",
+     "WARN"),
+    ("baseline from an earlier configuration", 0x0B5E0007,
+     _setup(lambda h: _new_ue(h), _baseline, lambda h: _rewrite_baseline(uptime_cycles=1 << 46)), "ddr.ue", "FAIL",
+     "FAIL"),
+]
+
+
+def _rewrite_baseline(**kw):
+    for f in os.listdir(H.state_dir()):
+        if f.startswith("ecc_baseline_"):
+            p = os.path.join(H.state_dir(), f)
+            with open(p) as fh:
+                d = json.load(fh)
+            d.update(kw)
+            with open(p, "w") as fh:
+                json.dump(d, fh)
+
+
+def ecc_failures(evaluate=None, ecc=None):
+    """Run every ECC scenario; return the descriptions whose result was not the expected one."""
+    saved = C.evaluate, C.ecc_items
+    if evaluate is not None:
+        C.evaluate = evaluate
+    if ecc is not None:
+        C.ecc_items = ecc
+    bad = []
+    try:
+        for desc, oid, setup, rule, sev, overall in ECC_SCENARIOS:
+            h = MockHost(oid)
+            setup(h)
+            r = C.run_check(h, H.discover(h)[0], interval=1.0)
+            if not [i for i in r["items"] if i["rule"] == rule and i["severity"] == sev] or r["severity"] != overall:
+                bad.append(desc)
+            for f in os.listdir(H.state_dir()):
+                os.remove(os.path.join(H.state_dir(), f))
+    finally:
+        C.evaluate, C.ecc_items = saved
+    return bad
+
+
+class EccStaleTests(unittest.TestCase):
+    def tearDown(self):
+        for f in os.listdir(H.state_dir()):
+            os.remove(os.path.join(H.state_dir(), f))
+
+    def test_scenarios(self):
+        self.assertEqual(ecc_failures(), [])
+
+    def test_warm_stale_is_warn_with_hint(self):
+        h = MockHost(0x0B5E0007)
+        _warm_stale(h)
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertEqual(r["severity"], "WARN")
+        it = [i for i in r["items"] if i["rule"] == "ddr.ue_stale"][0]
+        self.assertIn("likely stale-data reads after warm reboot", it["message"])
+        for w in ("link-down MIG reset", "expected after a warm reboot", "re-fill", "ecc-baseline", "cold-boot"):
+            self.assertIn(w, it["hint"])
+        self.assertIn("likely stale-data reads after warm reboot", C.render(r))
+        self.assertEqual(run_cli(h, ["check"])[0], 1)
+
+    def test_ue_after_baseline_fails_and_totals_are_info(self):
+        h = MockHost(0x0B5E0007)
+        _warm_stale(h)
+        _baseline(h)
+        rc, o, e = run_cli(h, ["check", "-v"])
+        self.assertEqual(rc, 0, o)
+        self.assertIn("ddr.ue_baselined", o)
+        self.assertIn("ddr.ce_baselined", o)
+        _new_ue(h)
+        rc, o, e = run_cli(h, ["check"])
+        self.assertEqual(rc, 2, o)
+        self.assertIn("1 ECC uncorrectable polls since the ecc-baseline", o)
+
+    def test_baseline_cli_file_and_passive(self):
+        h = MockHost(0x0B5E0007)
+        _warm_stale(h)
+        rc, o, e = run_cli(h, ["ecc-baseline", "--json"])
+        self.assertEqual(rc, 0, e)
+        d = json.loads(o)
+        self.assertEqual((d["baseline"]["ue_polls"], d["baseline"]["ce"], d["baseline"]["link_down"]), (2, 87, 1))
+        self.assertTrue(d["file"].startswith(os.path.join(STATE, ".cache", "innova2-smi")))
+        self.assertFalse(d["file"].startswith("/tmp/"))
+        self.assertEqual(h.model.writes, [])                 # host-side only
+        rc, o, e = run_cli(h, ["ecc-baseline", "--show"])
+        self.assertIn("UE polls 2", o)
+        rc, o, e = run_cli(h, ["ecc-baseline", "--remove"])
+        self.assertIn("removed", o)
+        self.assertEqual([f for f in os.listdir(H.state_dir()) if f.startswith("ecc_")], [])
+
+    def test_corrupt_baseline_ignored(self):
+        h = MockHost(0x0B5E0007)
+        _new_ue(h)
+        wfile(os.path.join(H.state_dir(), "ecc_baseline_0000_08_00.0.json"), "{not json")
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertIn("ddr.baseline_ignored", [i["rule"] for i in r["items"]])
+        self.assertEqual(r["severity"], "FAIL")
+
+    def test_mutant_suppress_every_ue_is_caught(self):
+        def silent(*a, **k):
+            return [i for i in C_EVALUATE(*a, **k) if not i["rule"].startswith("ddr.ue")]
+        self.assertGreaterEqual(len(ecc_failures(evaluate=silent)), 5)
+
+    def test_mutant_every_ue_stale_is_caught(self):
+        def stale(*a, **k):
+            out = C_ECC(*a, **k)
+            return [dict(i, rule="ddr.ue_stale", severity="WARN") if i["rule"].startswith("ddr.ue") else i for i in out]
+        bad = ecc_failures(ecc=stale)
+        self.assertIn("cold, UE (no link-down)", bad)
+        self.assertIn("UE after the baseline", bad)
+
+    def test_mutant_baseline_ignored_is_caught(self):
+        self.assertIn("stale UE acknowledged by a baseline", ecc_failures(
+            evaluate=lambda sh, s0, s1=None, **k: C_EVALUATE(sh, s0, s1, **dict(k, baseline=None))))
+
+
+C_EVALUATE, C_ECC = C.evaluate, C.ecc_items
+
+
+class UuidTests(unittest.TestCase):
+    U = "869cfe845d0b1f79869844ef67a34cd5"
+
+    def test_table_filled_and_hex(self):
+        self.assertEqual(R.SHELLS[1792461600]["uuid"], self.U)
+        for ts, d in R.SHELLS.items():
+            if d["name"] != "routeV":
+                self.assertRegex(d["uuid"] or "", r"^[0-9a-f]{32}$", d["name"])
+
+    def test_table_matches_build_xsabins(self):
+        dirs = {"E6b": "e6b", "E6b-2400": "e6b2400", "E6b-2400dw8": "e6b2400dw8", "E7a2": "e7a2",
+                "E7a3-2400": "e7a3_2400", "E7a3-2666ca48": "e7a3_2666ca48"}
+        for ts, d in R.SHELLS.items():
+            f = "/nobackup2/xilinx_shells_work/clkx300fp8c_%s_build/release/boot.xsabin" % dirs.get(d["name"], "-")
+            if not os.path.exists(f):
+                continue
+            with open(f, "rb") as fh:
+                b = fh.read(512)
+            self.assertEqual(int.from_bytes(b[320:328], "little"), ts, f)
+            self.assertEqual(b[336:352].hex(), d["uuid"], f)
+
+    def _st(self, h):
+        rc, o, e = run_cli(h, ["status"])
+        self.assertEqual(rc, 0, e)
+        return o
+
+    def test_live_uuid_matches(self):
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.1", "interface_uuids"): self.U + "\n"})
+        self.assertIn("interface uuid %s (xocl sysfs; table agrees)" % self.U, self._st(h))
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertEqual(r["identity"]["interface_uuid_check"], "match")
+        self.assertEqual(r["severity"], "OK")
+
+    def test_live_uuid_mismatch_warns(self):
+        bad = "0" * 31 + "1"
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.1", "interface_uuids"): bad})
+        o = self._st(h)
+        self.assertIn("WARN: table has %s" % self.U, o)
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertIn(("identity.uuid_mismatch", "WARN"), [(i["rule"], i["severity"]) for i in r["items"]])
+
+    def test_boot_xsabin_fallback(self):
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.1", "interface_uuids"): None})
+        x = "/lib/firmware/xilinx/10ee-788f-4351-%016x.xsabin" % 1792461600
+        h.files[x] = h.xclbin_hdr[:336] + bytes.fromhex(self.U) + h.xclbin_hdr[352:]
+        self.assertIn("interface uuid %s (boot xsabin header; table agrees)" % self.U, self._st(h))
+        h.files[x] = h.xclbin_hdr[:336] + bytes(15) + b"\x01" + h.xclbin_hdr[352:]
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertIn(("identity.uuid_mismatch", "WARN"), [(i["rule"], i["severity"]) for i in r["items"]])
+
+    def test_mgmt_fallback_and_table_only(self):
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.0", "interface_uuids"): self.U})
+        self.assertIn("(xclmgmt sysfs; table agrees)", self._st(h))
+        self.assertIn("%s (from this tool's table" % self.U, self._st(MockHost(0x0B5E0007)))
+
+
+class ThrottleWordingTests(unittest.TestCase):
+    def st(self, h):
+        rc, o, e = run_cli(h, ["status"])
+        self.assertEqual(rc, 0, e)
+        return o
+
+    def test_not_throttled_is_unambiguous(self):
+        o = self.st(MockHost(0x0B5E0007))
+        self.assertIn("in effect: FULL (not throttled)", o)
+        self.assertIn("FORCE        : off (force level if enabled: 1/2)", o)
+        self.assertIn("auto tiers   : T1=1/2", o)
+        self.assertIn("T2=1/4", o)
+        self.assertNotIn("level now", o)
+
+    def test_force_and_auto(self):
+        h = MockHost(0x0B5E0007)
+        h.model.r[0xC0] = 0x37
+        self.assertIn("in effect: FORCE 1/4 (throttled", self.st(h))
+        h = MockHost(0x0B5E0007)
+        h.model.r[0xC4] = (R.c2code(20) << 16) | R.c2code(30)
+        h.sleep(0.5)
+        self.assertIn("in effect: T1 (throttled to 1/2)", self.st(h))
+
+    def test_e7a2_one_tier(self):
+        o = self.st(MockHost(0x0B5E0005))
+        self.assertIn("in effect: FULL (not throttled)", o)
+        self.assertIn("auto         : one tier at the FORCE level (1/2)", o)
 
 
 if __name__ == "__main__":

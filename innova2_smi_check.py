@@ -21,6 +21,7 @@ Every threshold and every "known benign" rule is in RULES below.
 """
 
 import os
+import time
 
 import innova2_smi_hw as H
 import innova2_smi_regmap as R
@@ -51,6 +52,9 @@ RULES = {
                                                     "checked against the validated list; identify it by the FPGA DNA "
                                                     "(JTAG) and report the DDR4 chip marking"),
     "identity.obs_mismatch":  dict(sev="WARN", hint="ROM_TS names a build with another OBS_ID: flash/platform mix-up?"),
+    "identity.uuid_mismatch": dict(sev="WARN", hint="the interface uuid XRT read from the installed boot xsabin is "
+                                                    "not the one this tool lists for the flashed build: platform/flash "
+                                                    "mix-up, or a stale table entry"),
     "platform.no_xsabin":     dict(sev="FAIL", hint="no boot xsabin installed for this card's ROM_TS: install the "
                                                     "platform that matches the flashed shell"),
     "platform.test_dir":      dict(sev="WARN", hint="the validate kernels belong to another shell (validate would wedge "
@@ -62,8 +66,28 @@ RULES = {
     # DDR
     "ddr.not_calibrated":     dict(sev="FAIL", hint="DDR fenced: XRT refuses DDR and PLRAM xclbins; cold-cycle"),
     "ddr.mode":               dict(sev="WARN", expect="on", hint="DDR mode is not the expected one (--expect-mode)"),
-    "ddr.ue":                 dict(sev="FAIL", hint="uncorrectable ECC errors: DMA reads of that data fail (SLVERR)"),
-    "ddr.ce":                 dict(sev="WARN", hint="corrected ECC errors: watch the rate; a soak tells more"),
+    "ddr.ue":                 dict(sev="FAIL", hint="uncorrectable ECC errors on data written after the clean point "
+                                                    "(configuration or 'innova2-smi ecc-baseline'): DMA reads of that "
+                                                    "data fail (SLVERR); soak the card ('innova2-smi test ddr-soak')"),
+    "ddr.ue_stale":           dict(sev="WARN", hint="likely stale-data reads after a warm reboot: the link-down MIG "
+                                                    "reset loses the DDR contents, so reading buffers filled before the "
+                                                    "reboot gives UEs -- expected after a warm reboot. The counters are "
+                                                    "not host-clearable: re-fill, then 'innova2-smi ecc-baseline' (check "
+                                                    "then FAILs only on new UEs), or cold-boot to clear. The shell "
+                                                    "cannot see host fills, so this stays a WARN, never OK"),
+    "ddr.ue_unclassified":    dict(sev="WARN", hint="uncorrectable ECC errors with warm reboots since the clean point: "
+                                                    "stale-data reads after a reboot or real errors -- the shell cannot "
+                                                    "tell ('innova2-smi recorder' shows each ECC_UE / LINK_DOWN record "
+                                                    "time); re-fill and 'innova2-smi ecc-baseline', or cold-boot"),
+    "ddr.ue_baselined":       dict(sev="INFO", hint="uncorrectable ECC errors counted before the ecc-baseline; none since"),
+    "ddr.ce":                 dict(sev="WARN", hint="corrected ECC errors: watch the rate; a soak tells more (after a "
+                                                    "warm reboot, reads of pre-reboot data count here too: "
+                                                    "'innova2-smi ecc-baseline' after a re-fill counts only new ones)"),
+    "ddr.ce_baselined":       dict(sev="INFO", hint="corrected ECC errors counted before the ecc-baseline; none since"),
+    "ddr.baseline_ignored":   dict(sev="INFO", hint="the ecc-baseline file is not for this configuration of this card "
+                                                    "(cold boot / reflash since): judged on the totals; take a new one"),
+    "ddr.baseline":           dict(sev="INFO", hint="ECC judged against the host-side ecc-baseline "
+                                                    "(~/.cache/innova2-smi/ecc_baseline_<mgmt BDF>.json)"),
     "ddr.fenced":             dict(sev="WARN", hint="something accessed DDR while it was fenced (often one write in "
                                                     "the link-down window of a warm reboot)"),
     "ddr.link_down_rising":   dict(sev="WARN", hint="the PCIe link dropped during the check interval"),
@@ -189,8 +213,9 @@ def snapshot(sh):
     return s
 
 
-def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
-    """Rules over one or two snapshots. Returns the list of items (INFO, WARN and FAIL)."""
+def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None):
+    """Rules over one or two snapshots. Returns the list of items (INFO, WARN and FAIL). `baseline` is a usable
+    'innova2-smi ecc-baseline' record (H.load_ecc_baseline + H.baseline_usable), or None."""
     items = []
     lay, regs = sh.lay, (s1 or s0)["regs"]
     r0 = s0["regs"]
@@ -231,20 +256,7 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
         items.append(_item("ddr.mode", "DDR mode in force is '%s', expected '%s'" % (mode_force, expect_mode),
                            dict(requested=R.MODE_NAMES[st["mode"] & 3], in_force=mode_force)))
     ue, ce = rd(0x18), rd(0x14)
-    if ue & 0xFFFF or ue >> 31 & 1:
-        ev = dict(ue_polls=ue & 0xFFFF, ce=ce)
-        if rd(0x28) >> 31 & 1:
-            ev["first_ue"] = R.ffa_str(R.decode_ffa((rd(0x28) & 0x7FFFFFFF) << 32 | rd(0x24)))
-        if s1:
-            ev["ue_polls_in_interval"] = delta(0x18) & 0xFFFF
-        items.append(_item("ddr.ue", "%d ECC uncorrectable polls" % (ue & 0xFFFF), ev))
-    if ce:
-        ev = dict(ce=ce)
-        if rd(0x20) >> 31 & 1:
-            ev["first_ce"] = R.ffa_str(R.decode_ffa((rd(0x20) & 0x7FFFFFFF) << 32 | rd(0x1C)))
-        if s1:
-            ev["ce_in_interval"] = delta(0x14)
-        items.append(_item("ddr.ce", "%d ECC corrected errors" % ce, ev))
+    items += ecc_items(sh, s0, s1, baseline)
     if rv:
         fk, fall = rd(0x1EC), rd(0xA0)
         if fk:
@@ -454,10 +466,79 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None):
         for o, n in ((0xE0, "link-down"), (0xE8, "ECC CE"), (0xEC, "ECC UE"), (0xF0, "fenced access"),
                      (0xF8, "PCIe error")):
             ts = rd(o) * R.TS_S
+            if baseline and o in (0xE8, 0xEC) and ts <= baseline["uptime_s"]:
+                continue                            # acknowledged by the ECC baseline
             if rd(o) and ts > boot_at:
                 items.append(_item("event.since_boot", "last %s at FPGA uptime %.1f s, after the host booted "
                                    "(%.1f s)" % (n, ts, max(boot_at, 0)), dict(event=n, at_s=round(ts, 3),
                                                                                host_boot_at_s=round(boot_at, 3))))
+    return items
+
+
+def ecc_items(sh, s0, s1=None, baseline=None):
+    """ECC CE/UE items. The counters are cumulative since configuration and not host-clearable, so a UE is judged
+    against a CLEAN POINT: the configuration itself, or a host-side 'innova2-smi ecc-baseline' taken later.
+
+      * UEs since the clean point, no link-down since it         -> FAIL ddr.ue (DDR content has not been reset since:
+                                                                    these are errors on data written after it)
+      * ... with link-down(s) since it, the last UE AFTER the last link-down
+                                                                  -> WARN ddr.ue_stale: likely reads of pre-reboot data
+                                                                    the link-down MIG reset lost (the shell records no
+                                                                    host fills, so it cannot prove it: never OK)
+      * ... the last UE BEFORE the only link-down since it        -> FAIL ddr.ue (no MIG reset preceded them)
+      * ... the last UE before the last of several link-downs, or no event timestamps (E6b layout)
+                                                                  -> WARN ddr.ue_unclassified (stale or real: cannot tell)
+      * nothing since a baseline                                  -> INFO ddr.ue_baselined (totals)"""
+    regs = (s1 or s0)["regs"]
+    rd = lambda o: regs.get(o, 0)
+    items = []
+    ue_r, ce = rd(0x18), rd(0x14)
+    ue, ue_seen, ld = ue_r & 0xFFFF, bool(ue_r >> 31 & 1), rd(0x10) & 0xFFFF
+    b = baseline
+    ue_new = ue - b["ue_polls"] if b else ue
+    seen_new = ue_seen and not (b and b.get("ue_seen"))
+    ce_new = ce - b["ce"] if b else ce
+    ld_new = ld - b["link_down"] if b else ld
+    clean = ("the ecc-baseline at FPGA uptime %.1f s (%s)" % (b["uptime_s"], time.strftime(
+        "%Y-%m-%d %H:%M", time.localtime(b.get("written_at", 0)))) if b else "configuration")
+    up_cyc = rd(0xB4) << 32 | rd(0xB0)
+    ts_ok = bool(sh.lay["e7"]) and up_cyc < 1 << 48         # event TS = uptime[47:16]: wraps after ~13 days
+    t_ue, t_ld = rd(0xEC) * R.TS_S, rd(0xE0) * R.TS_S
+    if ue_new > 0 or seen_new or (ue == 0xFFFF and b and b["ue_polls"] == 0xFFFF):
+        ev = dict(ue_polls=ue, ue_polls_since_clean_point=ue_new, clean_point=clean, ce=ce, link_downs_since=ld_new)
+        if rd(0x28) >> 31 & 1:
+            ev["first_ue"] = R.ffa_str(R.decode_ffa((rd(0x28) & 0x7FFFFFFF) << 32 | rd(0x24)))
+        if ts_ok:
+            ev["last_ue_at_s"] = round(t_ue, 3) if rd(0xEC) else None
+            ev["last_link_down_at_s"] = round(t_ld, 3) if rd(0xE0) else None
+        if s1:
+            ev["ue_polls_in_interval"] = ((s1["regs"].get(0x18, 0) - s0["regs"].get(0x18, 0)) & 0xFFFF)
+        n = "%d ECC uncorrectable polls%s" % (ue_new, " since %s" % clean if b else "")
+        if ld_new == 0:
+            items.append(_item("ddr.ue", n + " with no link-down since %s: not stale-data reads" % clean, ev))
+        elif ts_ok and rd(0xEC) and rd(0xE0) and t_ue > t_ld:
+            items.append(_item("ddr.ue_stale", n + ", the last at %.1f s, after the warm reboot (link-down) at %.1f s: "
+                               "likely stale-data reads after warm reboot" % (t_ue, t_ld), ev))
+        elif ts_ok and rd(0xEC) and rd(0xE0) and ld_new == 1:
+            items.append(_item("ddr.ue", n + ", the last at %.1f s, BEFORE the only link-down since %s (%.1f s): no MIG "
+                               "reset preceded them, so they are not stale-data reads" % (t_ue, clean, t_ld), ev))
+        else:
+            items.append(_item("ddr.ue_unclassified", n + " with %d link-downs since %s: %s" % (
+                ld_new, clean, "the last UE precedes the last link-down" if ts_ok else
+                "this shell has no event timestamps"), ev))
+    elif ue or ue_seen:
+        items.append(_item("ddr.ue_baselined", "%d ECC uncorrectable polls in total, none since %s" % (ue, clean),
+                           dict(ue_polls=ue, at_baseline=b["ue_polls"] if b else None)))
+    if ce_new > 0:
+        ev = dict(ce=ce, ce_since_clean_point=ce_new, clean_point=clean, link_downs_since=ld_new)
+        if rd(0x20) >> 31 & 1:
+            ev["first_ce"] = R.ffa_str(R.decode_ffa((rd(0x20) & 0x7FFFFFFF) << 32 | rd(0x1C)))
+        if s1:
+            ev["ce_in_interval"] = (s1["regs"].get(0x14, 0) - s0["regs"].get(0x14, 0)) & 0xFFFFFFFF
+        items.append(_item("ddr.ce", "%d ECC corrected errors%s" % (ce_new, " since %s" % clean if b else ""), ev))
+    elif ce:
+        items.append(_item("ddr.ce_baselined", "%d ECC corrected errors in total, none since %s" % (ce, clean),
+                           dict(ce=ce, at_baseline=b["ce"] if b else None)))
     return items
 
 
@@ -615,6 +696,10 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
         return _result(card, sh, items)
     for w in sh.warnings:
         items.append(_item("identity.obs_mismatch", w, dict(rom_ts=sh.rom_ts, obs_id="0x%08X" % sh.obs_id)))
+    if sh.uuid_warning:
+        u = sh.uuid_info()
+        items.append(_item("identity.uuid_mismatch", sh.uuid_warning, dict(live=u["interface_uuid"], source=sh.uuid_source,
+                                                                            table=u["interface_uuid_table"])))
     items += platform_items(sh)
     items += xrt_items(sh)
     s0 = snapshot(sh)
@@ -622,7 +707,17 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
     if interval and interval > 0:
         host.sleep(interval)
         s1 = snapshot(sh)
-    items += evaluate(sh, s0, s1, expect_mode=expect_mode)
+    base = None
+    bpath, b, why = H.load_ecc_baseline(sh)
+    if b is not None:
+        why = H.baseline_usable(sh, b, (s1 or s0)["regs"], sn=bi.get("SN"))
+    if why:
+        items.append(_item("ddr.baseline_ignored", "ecc-baseline %s ignored: %s" % (bpath, why), dict(file=bpath)))
+    elif b is not None:
+        base = b
+        items.append(_item("ddr.baseline", "ECC counted since the ecc-baseline at FPGA uptime %.1f s: CE %d, UE polls %d "
+                           "then" % (b["uptime_s"], b["ce"], b["ue_polls"]), dict(file=bpath)))
+    items += evaluate(sh, s0, s1, expect_mode=expect_mode, baseline=base)
     last = s1 or s0
     ctx = H.mem_context(host, card, sh, regs=last["regs"], memcalib=last["memcalib"])
     items += routev_mem_items(ctx)

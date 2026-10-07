@@ -39,6 +39,11 @@ CX5_VENDOR, BOPE_DEV = "0x15b3", "0x0264"
 # Builds this tool knows by ROM timestamp (ROM_TS = the feature-ROM TimeSinceEpoch = rom.m.*/timestamp = the
 # xclbin's m_featureRomTimeStamp). Several builds share an OBS_ID, so the ROM_TS is what names the build; the OBS_ID
 # is what selects the register map. A build that is not listed here is still handled if its OBS_ID is known.
+# uuid = the interface uuid, checked 2026-10-06 against each build's release/boot.xsabin and bandwidth.xclbin axlf
+# headers (m_interface_uuid) and chain.out. It is only a cross-check: status/check read the live value from the
+# xocl / xclmgmt `interface_uuids` sysfs attribute, else from the header of the boot xsabin xclmgmt loaded for this
+# ROM_TS (XRT 2.17 answers EINVAL for these shells: their device tree carries no interface_uuid property).
+# Route V: none released yet, so None.
 SHELLS = {
     1792022400: dict(name="E6b", obs_id=0x0B5E0002, uuid="2c2e0dfa2a774cec299b3fe47a5c6627", ddr="DDR4-2666 72-bit ECC"),
     1792368000: dict(name="E6b-2400", obs_id=0x0B5E0002, uuid="389b4c78ceec074b8d869b79e6a385f2", ddr="DDR4-2400 72-bit ECC"),
@@ -47,7 +52,7 @@ SHELLS = {
     1792281600: dict(name="E7a2", obs_id=0x0B5E0005, uuid="50d5d173eb28dc07390e435c16516a34", ddr="DDR4-2666 72-bit ECC"),
     1792458000: dict(name="E7a3-2400", obs_id=0x0B5E0006, uuid="5970d74a63e26d3fe4041d0b50f5319f",
                      ddr="DDR4-2400 72-bit ECC (dw8_833)"),
-    1792461600: dict(name="E7a3-2666ca48", obs_id=0x0B5E0007, uuid=None, ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48"),
+    1792461600: dict(name="E7a3-2666ca48", obs_id=0x0B5E0007, uuid="869cfe845d0b1f79869844ef67a34cd5", ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48"),
     1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid=None,
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
 }
@@ -479,11 +484,12 @@ def parse_vpd(raw):
 
 
 def xclbin_header(b):
-    """axlf header fields innova2-smi checks before loading anything: magic, featureRomTimeStamp, VBNV, uuid."""
+    """axlf header fields innova2-smi checks before loading anything: magic, featureRomTimeStamp, interface uuid
+    (m_interface_uuid), VBNV, uuid."""
     import struct
     if len(b) < 432 or b[:7] != b"xclbin2":
         return None
-    return dict(rom_ts=struct.unpack_from("<Q", b, 320)[0],
+    return dict(rom_ts=struct.unpack_from("<Q", b, 320)[0], interface_uuid=b[336:352].hex(),
                 vbnv=b[352:416].split(b"\0")[0].decode("ascii", "replace"),
                 uuid=b[416:432].hex())
 

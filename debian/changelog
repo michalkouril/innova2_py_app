@@ -1,3 +1,28 @@
+innova2-app (1.3.4) unstable; urgency=medium
+
+  * innova2-smi status/check: the interface uuid is read passively from
+    xocl's (else xclmgmt's) sysfs interface_uuids, else (XRT 2.17 answers
+    EINVAL for these shells) from the header of the boot xsabin loaded for the
+    card's ROM_TS; the per-build table is only a cross-check and a mismatch is
+    a WARN (identity.uuid_mismatch). The
+    table now has E7a3-2666ca48 (869cfe84...); every entry re-checked against
+    its build's boot.xsabin / bandwidth.xclbin headers and chain.out.
+  * status: the throttle line says what is in effect ("in effect: FULL (not
+    throttled)"), the FORCE setting on its own line ("FORCE: off (force level
+    if enabled: 1/2)") and the automatic tiers ("auto tiers: T1=1/2, T2=1/4").
+  * check: UEs are judged against a clean point (configuration or an
+    ecc-baseline). After a warm reboot, UEs whose last one follows the last
+    link-down are WARN ddr.ue_stale ("likely stale-data reads after warm
+    reboot", hint: contents lost in the link-down MIG reset; re-fill, then
+    ecc-baseline, or cold boot); where the shell cannot tell stale from fresh
+    it says so (WARN ddr.ue_unclassified). UEs with no link-down since the
+    clean point stay FAIL.
+  * innova2-smi ecc-baseline [--show|--remove]: records CE/UE/link-down counts
+    and FPGA uptime per card in ~/.cache/innova2-smi/; check then judges only
+    errors since it (a new UE is a FAIL) and shows the totals as INFO.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Tue, 06 Oct 2026 23:43:51 -0400
+
 innova2-app (1.3.3) unstable; urgency=medium
 
   * innova2-smi: DDR mode emu/hybrid counts as ready (URAM emulation); fixes a false mem.bank_not_ready FAIL.
