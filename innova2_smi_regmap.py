@@ -57,6 +57,10 @@ SHELLS = {
     1792458000: dict(name="E7a3-2400", obs_id=0x0B5E0006, uuid="5970d74a63e26d3fe4041d0b50f5319f",
                      ddr="DDR4-2400 72-bit ECC (dw8_833)"),
     1792461600: dict(name="E7a3-2666ca48", obs_id=0x0B5E0007, uuid="869cfe845d0b1f79869844ef67a34cd5", ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48"),
+    1792468800: dict(name="E7a3-2400ca48", obs_id=0x0B5E0009, uuid="8b85b528d4b122cd232eb5ff8787ddce",
+                     ddr="DDR4-2400 72-bit ECC (dw8_833), CA RDRV_48_48"),
+    1792472400: dict(name="E7a3-2666ca60", obs_id=0x0B5E000A, uuid="3f6b9d2219f59bb33a37cf39bf4a06d3",
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
     1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid="5027516c91a681bd01afaf11083d9d60", boot_rm="KEPT template",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
     # route V r2: the flash image boots with the PRUNED filler in the dynamic region (no MIG at power-on)
@@ -266,6 +270,10 @@ LAYOUTS = {
     0x0B5E0006: dict(name="E7a3", e7=True, e7a3=True, mon=False, released=True, regs=_merge(_BASE, _E7, _E7A3)),
     0x0B5E0007: dict(name="E7a3-2666ca48 (E7a3 register map)", e7=True, e7a3=True, mon=False, released=True,
                      regs=_merge(_BASE, _E7, _E7A3)),
+    0x0B5E0009: dict(name="E7a3-2400ca48 (E7a3 register map)", e7=True, e7a3=True, mon=False, released=True,
+                     regs=_merge(_BASE, _E7, _E7A3)),
+    0x0B5E000A: dict(name="E7a3-2666ca60 (E7a3 register map)", e7=True, e7a3=True, mon=False, released=True,
+                     regs=_merge(_BASE, _E7, _E7A3)),
     # route V: not yet run on hardware (released=False until the owner's first-hardware session)
     0x0B5E0008: dict(name="route V (E7a3 map + DDR-in-RP block 0x1C0; DDR per xclbin)", e7=True, e7a3=True, mon=False,
                      released=True, routev=True, regs=_merge(_BASE, _E7, _E7A3, _RV)),
@@ -283,6 +291,8 @@ THR_DEFAULTS = {
     0x0B5E0005: {0xC0: 0x00000031, 0xC4: 0x02D402E9},
     0x0B5E0006: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0007: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E0009: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
+    0x0B5E000A: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E0008: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
     0x0B5E000B: {0xC0: 0x00000031, 0xC4: 0x02C102D5, 0xD8: 0x02D502E9, 0xDC: 0x00010100},
 }
@@ -363,6 +373,8 @@ MIG_BUILDS = {
     1792281600: dict(_MIG_2666, variant="dw8_750 (before mig_variant.tcl)"),
     1792458000: dict(_MIG_2400_DW8, variant="dw8_833"),
     1792461600: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_48_48 (ca_drive.tcl, routed gate passed)"),
+    1792468800: dict(_MIG_2400_DW8, variant="dw8_833", ca_drive="RDRV_48_48 (ca_drive.tcl, routed gate passed)"),
+    1792472400: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
     # route V: the MIG is in each KEPT xclbin; these are the template's (MIG_VARIANT e6b750, CA_DRIVE RDRV_48_48, the
     # in-RP ddr_ecc_poller's POLL_CYC 333000). An xclbin built from another template differs: DDR_INFO will say.
     1792465200: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,
