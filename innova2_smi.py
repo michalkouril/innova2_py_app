@@ -9,6 +9,7 @@
   innova2-smi list                         every Innova-2 card, found from its ConnectX-5, with the FPGA's state
   innova2-smi status   [-d CARD]           one-screen health of a card
   innova2-smi check    [-d CARD|--all]     passive "concerns only" check (safe while kernels/DMA run); exit 0/1/2
+  innova2-smi memory   [-d CARD]           memory banks of the loaded xclbin: used, ready, PRUNED
   innova2-smi counters [-d CARD] [--watch N]   every counter the running shell exposes
   innova2-smi recorder [-d CARD] [-n N]    the flight recorder (E7a2+)
   innova2-smi clear | ddr-mode | throttle ...   controls (state changes need confirmation or --yes)
@@ -37,7 +38,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 
 def _version():
@@ -116,7 +117,8 @@ def cmd_list(host, args):
         q = c.get("cx5_query") or {}
         rv = H.routev(sh) if sh.ok else None
         rows.append(dict(index=c["index"], switch=c["switch"], cx5=c["cx5"], serial=bi.get("SN"), part=bi.get("PN"),
-                         rev=bi.get("EC"), board_validated=bi.get("validated"), mgmt=c["mgmt"], user=c["user"],
+                         rev=bi.get("EC"), board_validated=bi.get("validated"), psid=bi.get("psid"),
+                         vpd_empty=bi.get("vpd_empty"), board=bi, mgmt=c["mgmt"], user=c["user"],
                          bope=c["bope"], fpga_functions=c["fpga"], state=c["state"],
                          running_image=H.CX5_IMAGES.get(q.get("oper")) if "oper" in q else None,
                          cx5_query=q, cx5_health=hl, flags=c["flags"],
@@ -132,9 +134,17 @@ def cmd_list(host, args):
     for r in rows:
         s = r["shell"]
         q = r["cx5_query"] or {}
-        print("card %d  ConnectX-5 %s  serial %s  board %s rev %s%s" % (
-            r["index"], ",".join(r["cx5"]), r["serial"] or "?", r["part"] or "?", r["rev"] or "?",
-            "" if r["board_validated"] in (None, True) else " (NOT a validated board)"))
+        b = r["board"]
+        if "error" in b:
+            bline = "board unknown (%s)" % b["error"]
+        elif b.get("vpd_empty"):
+            bline = "serial none, board none (VPD empty%s: not identifiable)" % (
+                "; PSID %s fw %s" % (b["psid"], b.get("fw_ver")) if b.get("psid") else "")
+        else:
+            bline = "serial %s  board %s rev %s%s" % (
+                r["serial"] or "(no SN in VPD)", r["part"] or "(no PN in VPD)", r["rev"] or "(no EC in VPD)",
+                "" if r["board_validated"] in (None, True) else " (NOT a validated board)")
+        print("card %d  ConnectX-5 %s  %s" % (r["index"], ",".join(r["cx5"]), bline))
         print("        FPGA %s  state %s" % (
             ", ".join("%s 10ee:%s [%s]" % (f["bdf"], f["device"][2:], f["driver"] or "no driver") for f in r["fpga_functions"])
             or (("burn endpoint " + r["bope"]) if r["bope"] else "none"), r["state"]))
@@ -159,6 +169,7 @@ def collect_status(host, card, sh):
     st = dict(card=dict(index=card["index"], cx5=card["cx5"], switch=card["switch"], fpga=card["fpga"],
                         state=card["state"], flags=card["flags"], cx5_query=card.get("cx5_query")),
               identity=sh.ident(), board=H.board_id(host, card))
+    st["memory"] = H.xrt_memory(host, card, sh)
     if not sh.ok:
         return st
     up = H.uptime(sh)
@@ -196,12 +207,7 @@ def render_status(st):
     c, i = st["card"], st["identity"]
     b = st["board"]
     L.append("card %d: ConnectX-5 %s, switch %s, state %s" % (c["index"], ",".join(c["cx5"]), c["switch"], c["state"]))
-    if "error" in b:
-        L.append("board          : unknown (%s)" % b["error"])
-    else:
-        L.append("board          : %s rev %s, serial %s -- %s" % (
-            b.get("PN"), b.get("EC"), b.get("SN"), "validated board" if b.get("validated") else
-            "*** NOT a validated board: the DDR4 part may differ from " + R.DDR_PART))
+    L.append("board          : " + H.board_summary(b))
     L.append("shell          : %s, ROM_TS %s (%s), OBS_ID %s (%s), interface uuid %s" % (
         i.get("build") or "?", i.get("rom_ts"), i.get("rom_ts_hex"), i.get("obs_id"), i.get("layout"),
         i.get("interface_uuid") or "-"))
@@ -213,10 +219,14 @@ def render_status(st):
         L.append("not read further: %s" % i.get("refused"))
         for s in i.get("steps", []):
             L.append("  %-28s %s %s" % (s["step"], "ok  " if s["ok"] else "FAIL", s["detail"]))
+        if st.get("memory"):
+            L += render_memory(st["memory"], prefix="memory         : ")
         return "\n".join(L)
     x = st["xrt"]
     L.append("XRT            : Device Ready %s, mgmt ready %s, MIG calibration %s, xclbin %s" % (
         x["device_ready"], x["mgmt_ready"], x["mig_calibration"], x["xclbin_uuid"]))
+    if st.get("memory"):
+        L += render_memory(st["memory"], prefix="memory         : ")
     ck = st["clocks"]
     L.append("clocks         : DATA_CLK %s MHz (counter %s), KERNEL_CLK %s MHz (counter %s)" % (
         ck["data_clk"]["wizard_mhz"], ck["data_clk"]["counter_mhz"], ck["kernel_clk"]["wizard_mhz"],
@@ -327,6 +337,49 @@ def cmd_status(host, args):
     st = collect_status(host, card, sh)
     out(args, st, render_status(st))
     return 0 if sh.ok else 1
+
+
+# ----------------------------------------------------------------------------------------------- memory
+def _size(n):
+    for u, sh in (("GB", 30), ("MB", 20), ("KB", 10)):
+        if n >= 1 << sh and n % (1 << sh) == 0:
+            return "%d %s" % (n >> sh, u)
+    return "%d B" % n
+
+
+def render_memory(m, prefix="memory: ", detail=False):
+    """The memory section: one header line, then one line per bank (status and the memory command)."""
+    if not m.get("available"):
+        return [prefix + "not available: %s" % m.get("reason")]
+    if not m.get("xclbin_loaded"):
+        return [prefix + "no xclbin loaded (%s)" % m.get("reason")]
+    L = [prefix + "xclbin %s, %d banks (xocl sysfs mem_topology; PRUNED is shown only where verifiable)" % (
+        m["xclbin_uuid"], len(m["banks"]))]
+    L.append("  %-3s %-8s %-6s %-5s %-14s %-8s %-4s %s" % ("idx", "tag", "kind", "type", "base", "size", "used", "state"))
+    for b in m["banks"]:
+        cu = sorted({c.split(".arg")[0] for c in b["connections"]})
+        L.append("  %-3s %-8s %-6s %-5s %-14s %-8s %-4s %s%s" % (
+            b["index"] if not b["slot"] else "%d/%d" % (b["slot"], b["index"]), b["tag"], b["kind"], b["type"],
+            b["base"], _size(b["size_bytes"]), "yes" if b["used"] else "no", b["state"],
+            ("  [%d CU arg%s: %s]" % (len(b["connections"]), "" if len(b["connections"]) == 1 else "s", ", ".join(cu))) if cu else ""))
+        if detail and b.get("evidence"):
+            L.append("        evidence: %s" % b["evidence"])
+    if detail:
+        L.append("  prune marker: %s" % m["prune_marker"]["note"])
+    return L
+
+
+def cmd_memory(host, args):
+    """Memory banks of the loaded xclbin: tag, type, base, size, used, the CU arguments on each, readiness, and the
+    prune state. Passive: xocl's sysfs copies of mem_topology / ip_layout / connectivity under the user PF plus the
+    shell's own registers; no XRT context, no xrt-smi. PRUNED is reported only where it is verifiable (route V's
+    DDR, from RV_INFO); an unused PLRAM / HOST / PEER bank is 'unused (may be pruned)': the prune hooks put no marker
+    in the xclbin (docs/innova2_smi_prune_marker.md proposes one)."""
+    card, sh = open_card(host, args, need_shell=False)
+    m = H.xrt_memory(host, card, sh)
+    out(args, m, "card %d (%s, %s)\n" % (card["index"], card.get("user") or "-", sh.name or card["state"]) +
+        "\n".join(render_memory(m, prefix="memory: ", detail=True)))
+    return 0 if m.get("available") else 1
 
 
 # ----------------------------------------------------------------------------------------------- check
@@ -763,6 +816,7 @@ def build_parser():
                    help="the DDR mode this card should be in (default on; '' = any)")
     q.add_argument("-v", "--verbose", action="store_true", help="also show INFO (known benign) items")
     q.add_argument("--rules", action="store_true", help="print the rules table and exit")
+    add("memory", cmd_memory, "memory banks of the loaded xclbin (used / ready / PRUNED)")
     q = add("counters", cmd_counters, "every counter the running shell exposes")
     q.add_argument("--watch", type=float, metavar="N", help="re-read every N seconds and show deltas (Ctrl-C stops)")
     q.add_argument("--all-rows", action="store_true", help="with --watch: print every row, not only changed ones")

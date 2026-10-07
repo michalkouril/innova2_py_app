@@ -1,3 +1,21 @@
+innova2-app (1.3.1) unstable; urgency=medium
+
+  * innova2-smi memory, and a memory section in status / status --json: every
+    memory bank of the loaded xclbin (tag, type, base, size, used, the CU
+    arguments on it, ready, prune state), read passively from xocl's sysfs
+    mem_topology / ip_layout / connectivity (no XRT context, no xrt-smi).
+    PRUNED is shown only where verifiable (route V's DDR, from RV_INFO);
+    unused PLRAM/HOST/PEER banks are "unused (may be pruned)".
+  * check: mem.no_xclbin (INFO), mem.bank_not_ready (FAIL: a used bank that
+    is not calibrated / ready), mem.ddr_kept_not_ready (WARN, route V: DDR
+    KEPT while ddr_ready=0), identity.vpd_empty (WARN).
+  * list / status: a ConnectX-5 with an empty VPD (hpz440's card) prints
+    "VPD empty" and its PSID / firmware instead of "serial ? board ? rev ?",
+    and is no longer called "NOT a validated board" (it cannot be checked).
+  * docs/innova2_smi_prune_marker.md: proposed xclbin marker for the hooks.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Tue, 06 Oct 2026 22:30:00 -0400
+
 innova2-app (1.3.0) unstable; urgency=medium
 
   * New command innova2-smi: query and test the Innova-2 XRT shell (fp8c

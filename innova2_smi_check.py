@@ -47,6 +47,9 @@ RULES = {
     "identity.old":           dict(sev="WARN", hint="pre-fp8c shell: innova2-smi reports its identity only"),
     "identity.board":         dict(sev="WARN", hint="board PN/EC not validated for this DDR controller; report the "
                                                     "DDR4 chip marking"),
+    "identity.vpd_empty":     dict(sev="WARN", hint="the ConnectX-5 VPD is empty (no PN/EC/SN): the board cannot be "
+                                                    "checked against the validated list; identify it by the FPGA DNA "
+                                                    "(JTAG) and report the DDR4 chip marking"),
     "identity.obs_mismatch":  dict(sev="WARN", hint="ROM_TS names a build with another OBS_ID: flash/platform mix-up?"),
     "platform.no_xsabin":     dict(sev="FAIL", hint="no boot xsabin installed for this card's ROM_TS: install the "
                                                     "platform that matches the flashed shell"),
@@ -83,6 +86,14 @@ RULES = {
                                                     "force ('innova2-smi ddr-mode on')"),
     "ddr.rp_isolated":        dict(sev="WARN", hint="the dynamic region is isolated (an xclbin load in progress or "
                                                     "stuck): DDR state not meaningful"),
+    # memory banks of the loaded xclbin (xocl sysfs mem_topology + the shell's registers; see innova2-smi memory)
+    "mem.no_xclbin":          dict(sev="INFO", hint="no xclbin is loaded: nothing to judge per bank"),
+    "mem.unavailable":        dict(sev="INFO", hint="xocl's mem_topology is not readable (xocl not bound, or no icap "
+                                                    "subdevice): per-bank checks skipped"),
+    "mem.bank_not_ready":     dict(sev="FAIL", hint="a bank the loaded xclbin USES is not ready (DDR not calibrated, "
+                                                    "RP isolated, no host memory, P2P off): kernels using it fail or hang"),
+    "mem.ddr_kept_not_ready": dict(sev="WARN", hint="route V: the loaded RM carries the MIG (KEPT) but ddr_ready=0: "
+                                                    "calibration pending or failed (bad DDR card? reload the xclbin)"),
     # temperature
     "temp.hot_warn":          dict(sev="WARN", threshold=80.0, hint="FPGA hotter than the warning level; check "
                                                                    "airflow / fan"),
@@ -485,6 +496,32 @@ def xrt_items(sh):
     return items
 
 
+def mem_items(mem):
+    """Per-bank items from H.xrt_memory (its context is the check's own snapshot)."""
+    items = []
+    if not mem.get("available"):
+        items.append(_item("mem.unavailable", mem.get("reason") or "mem_topology not readable", {}))
+        return items
+    if not mem.get("xclbin_loaded"):
+        items.append(_item("mem.no_xclbin", "no xclbin loaded (%s)" % mem.get("reason"),
+                           dict(xclbin_uuid=mem.get("xclbin_uuid"))))
+        return items
+    for b in mem["banks"]:
+        if b["used"] and b["ready"] is False:
+            items.append(_item("mem.bank_not_ready", "bank %s (%s %s @%s) is used by the xclbin but is %s" % (
+                b["tag"], b["kind"], b["type"], b["base"], b["state"].replace("in use, ", "")),
+                dict(cu_args=len(b["connections"]), evidence=b["evidence"], xclbin=mem.get("xclbin_uuid"))))
+    return items
+
+
+def routev_mem_items(ctx):
+    """Route V: KEPT while ddr_ready=0 (from the register snapshot; independent of mem_topology)."""
+    if ctx.get("routev") and ctx.get("rp_released") and ctx.get("ddr_kept") and not ctx.get("ddr_ready"):
+        return [_item("mem.ddr_kept_not_ready", "DDR KEPT (the RM has a MIG) while ddr_ready=0",
+                      dict(source=ctx.get("ddr_ready_source")))]
+    return []
+
+
 def card_items(host, card):
     """Items from discovery/classification (the ConnectX-5 side); card must have been classify()'d."""
     items = []
@@ -525,12 +562,16 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
         sh.identify()
         card["state"] = sh.state
     bi = H.board_id(host, card)
-    if "error" not in bi and not bi.get("validated"):
+    if bi.get("vpd_empty"):
+        items.append(_item("identity.vpd_empty", "ConnectX-5 %s has an empty VPD: PN/EC/serial unknown" % bi.get("nic"),
+                           dict(psid=bi.get("psid"), fw=bi.get("fw_ver"))))
+    elif "error" not in bi and not bi.get("validated"):
         items.append(_item("identity.board", "board %s rev %s is not a validated board" % (bi.get("PN"), bi.get("EC")),
                            dict(pn=bi.get("PN"), ec=bi.get("EC"), serial=bi.get("SN"))))
     if not sh.ok:
         if card["state"] == "OUR_SHELL_OLD":
             items.append(_item("identity.old", sh.reason, dict(vbnv=sh.vbnv, rom_ts=sh.rom_ts)))
+            items += mem_items(H.xrt_memory(host, card, None))      # sysfs only: XRT's own calibration attribute
         elif card["state"] == "OUR_SHELL_UNREADABLE":
             failed = [x for x in sh.steps if not x["ok"]]
             items.append(_item("identity.refused", sh.reason or "shell not identified",
@@ -547,6 +588,10 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
         host.sleep(interval)
         s1 = snapshot(sh)
     items += evaluate(sh, s0, s1, expect_mode=expect_mode)
+    last = s1 or s0
+    ctx = H.mem_context(host, card, sh, regs=last["regs"], memcalib=last["memcalib"])
+    items += routev_mem_items(ctx)
+    items += mem_items(H.xrt_memory(host, card, sh, ctx=ctx))
     return _result(card, sh, items)
 
 

@@ -1,7 +1,9 @@
 # innova2_app — Innova-2 management app for current Mellanox/NVIDIA drivers
 
-Version 1.3.0 (2026-10-06). New in 1.3.0: [`innova2-smi`](#innova2-smi--query-and-test-the-xrt-shell), which queries and tests
-the Innova-2 XRT shell. `innova2_app` itself is unchanged.
+Version 1.3.1 (2026-10-06). New in 1.3.1: `innova2-smi memory` (and a memory section in `status`): every memory bank of
+the loaded xclbin, used / ready / PRUNED; boards with an empty ConnectX-5 VPD are reported as such. New in 1.3.0:
+[`innova2-smi`](#innova2-smi--query-and-test-the-xrt-shell), which queries and tests the Innova-2 XRT shell.
+`innova2_app` itself is unchanged.
 
 `innova2_app` manages the Xilinx FPGA on a Mellanox Innova-2 Flex card. It does what Mellanox's
 `innova2_flex_app` 18.07.00 did, with the same menus and options:
@@ -47,6 +49,7 @@ still accepted.)
 |---|---|
 | `innova2_app.py` | the app. Vendor menus and options, plus `[ext]` batch commands (`--batch …`, `--transport`, `--yes`). |
 | `innova2_smi.py` (+ `innova2_smi_*.py`) | `innova2-smi`: query and test the Innova-2 XRT shell (see below). `innova2_smi_regmap.py` holds the register maps, `_hw` discovery and guarded MMIO, `_check` the passive check and its rules table, `_tests` / `_xrt` the active tests. |
+| `docs/innova2_smi_prune_marker.md` | proposal: a marker the v++ prune hooks could put in the xclbin so `innova2-smi memory` can show PRUNED for PLRAM/HOST/PEER. |
 | `docs/innova2_smi_regmap.md` | the shell register map innova2-smi uses, generated from `innova2_smi_regmap.py` (`innova2-smi regmap --markdown`) and checked against `ddr_health.v` (`regmap --check-rtl`). |
 | `tests/` | innova2-smi unit tests against mock hosts (`python3 -m unittest discover -s tests`). |
 | `rawspi.py` | direct access to both flash chips. The app uses it to check that both chips answer before burning from a running User image, and to verify a burn: first and last 4 KB plus 14 spread blocks. |
@@ -151,6 +154,7 @@ health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, X
 | `innova2-smi list` | every card: ConnectX-5 BDFs and serial, FPGA functions, FPGA state, the image the ConnectX reports, shell (VBNV, ROM_TS, OBS_ID, build), XRT Device Ready |
 | `innova2-smi status [-d CARD]` | one screen: identity and board check, clocks, DDR mode/calibration/ECC (first-fail decoded), link-downs, fenced accesses, every temperature source (LIVE / STALE / UNRELIABLE), voltages, throttle, PCIe, PR count, uptime, P2P / PEER windows / PLRAM alias, the last flight-recorder records |
 | `innova2-smi check [-d CARD\|--all]` | passive, concerns only: one line per WARN/FAIL with evidence and a hint, or `OK: no concerns`. Exit 0 OK, 1 WARN, 2 FAIL (for cron). `--interval S` (default 1) takes two snapshots for rates; `--since-boot` takes one; `-v` adds the known-benign INFO items; `--rules` prints the rules table. `status --concerns` is an alias. |
+| `innova2-smi memory [-d CARD]` | every memory bank of the loaded xclbin (bank0/DDR, PLRAM0..2, HOST, PEER): tag, type, base, size, `used`, the CU arguments on it, whether it is ready (DDR calibrated, RP released, host memory reserved, P2P on) and its prune state. PRUNED is shown only where it can be verified (route V's DDR, from the shell's RV_INFO); an unused PLRAM/HOST/PEER bank is `unused (may be pruned)`, because the prune hooks put no marker in the xclbin (see `docs/innova2_smi_prune_marker.md`). Passive: xocl's sysfs copies of mem_topology / ip_layout / connectivity, no XRT context. Also part of `status`; `check` FAILs a used bank that is not ready |
 | `innova2-smi counters [-d CARD] [--watch N]` | every counter and register the running shell exposes, from its OBS_ID map, plus SYSMON, XRT's clock wizards and frequency counters, the cmc sensors, the PEER/alias counters and AER; `--watch` shows deltas |
 | `innova2-smi recorder [-n N]` | the flight recorder, decoded (E7a2 and later) |
 | `innova2-smi clear` / `ddr-mode [on\|off\|emu\|hybrid]` | controls, with confirmation (or `--yes`) |

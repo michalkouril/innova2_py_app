@@ -384,8 +384,10 @@ class MockHost:
         return {n.split("/")[-1]: v for (b, n), v in self.attrs_.items() if b == bdf and fnmatch(n, pattern)}
 
     def raw(self, bdf, name, n=4096):
-        v = self.attrs_.get((bdf, name))
-        return v if isinstance(v, bytes) else None
+        for (b, k), v in self.attrs_.items():
+            if b == bdf and (k == name or fnmatch(k, name)) and isinstance(v, bytes):
+                return v[:n]
+        return None
 
     def driver(self, bdf):
         return self.attrs_.get((bdf, "driver"))
@@ -1151,3 +1153,197 @@ class RouteVTests(unittest.TestCase):
         self.assertEqual(R.REC_TYPES[20], "RM_DDR")
         self.assertIn("PRUNED", R.record_detail(20, 0))
         self.assertIn("ms after the RP release", R.record_detail(21, 100))
+
+
+# ----------------------------------------------------------------------------------------------- memory banks
+import struct                                                         # noqa: E402
+
+USER = "0000:08:00.1"
+FP8C_BANKS = [  # tag, MEM_TYPE index, size KB, base -- the fp8c / route-V platform's six banks
+    ("bank0", 1, 8 << 20, 0x200000000), ("PLRAM2", 2, 256, 0x2040000), ("PLRAM0", 2, 256, 0x2000000),
+    ("PLRAM1", 2, 256, 0x2020000), ("HOST", 2, 16 << 20, 0x2000000000), ("PEER", 2, 4096, 0x400000000)]
+
+
+def mem_topology(used, banks=FP8C_BANKS):
+    b = struct.pack("<i4x", len(banks))
+    for (tag, t, kb, base), u in zip(banks, used):
+        b += struct.pack("<BB6xQQ16s", t, u, kb, base, tag.encode())
+    return b
+
+
+def ip_layout(names):
+    b = struct.pack("<i4x", len(names))
+    for i, n in enumerate(names):
+        b += struct.pack("<IIQ64s", 1, 0x101, 0x1000000 + 0x10000 * i, n.encode())
+    return b
+
+
+def connectivity(conns):
+    return struct.pack("<i", len(conns)) + b"".join(struct.pack("<iii", *c) for c in conns)
+
+
+def load_xclbin(h, used, conns, names=("lat_probe:lp_ddr", "lat_probe:lp_p0")):
+    """What xocl shows under the user PF after an xclbin load: uuid + the three binary sections."""
+    h.attrs_.update({(USER, "xclbinuuid"): "97613339-17af-2573-b200-1d96740165e0",
+                     (USER, "icap.u.1/mem_topology"): mem_topology(used),
+                     (USER, "icap.u.1/ip_layout"): ip_layout(list(names)),
+                     (USER, "icap.u.1/connectivity"): connectivity(conns)})
+
+
+class MemoryTests(unittest.TestCase):
+    def check(self, h):
+        return C.run_check(h, H.discover(h)[0], interval=1.0)
+
+    def rules(self, r, sev=None):
+        return [i["rule"] for i in r["items"] if sev is None or i["severity"] == sev]
+
+    def banks(self, h):
+        rc, o, e = run_cli(h, ["memory", "--json"])
+        self.assertEqual(rc, 0, e)
+        return {b["tag"]: b for b in json.loads(o)["banks"]}
+
+    def test_fp8c_all_banks_used(self):
+        h = MockHost(0x0B5E0007)
+        h.attrs_[(USER, "host_mem_size")] = str(1 << 30)
+        # lp_ddr args 0,1 on bank0; lp_p0 args 0..3 on PLRAM0, PLRAM1, PLRAM2, HOST, and PEER on arg 4
+        load_xclbin(h, [1] * 6, [(0, 0, 0), (1, 0, 0), (0, 1, 2), (1, 1, 3), (2, 1, 1), (3, 1, 4), (4, 1, 5)])
+        b = self.banks(h)
+        self.assertEqual(list(b), ["bank0", "PLRAM2", "PLRAM0", "PLRAM1", "HOST", "PEER"])
+        self.assertEqual((b["bank0"]["kind"], b["bank0"]["type"], b["bank0"]["base"], b["bank0"]["size_bytes"]),
+                         ("DDR", "DDR4", "0x200000000", 8 << 30))
+        self.assertEqual(b["PLRAM2"]["size_bytes"], 256 << 10)
+        self.assertEqual(b["bank0"]["connections"], ["lp_ddr.arg0", "lp_ddr.arg1"])
+        for t, x in b.items():
+            self.assertTrue(x["used"] and x["ready"], (t, x["state"]))
+            self.assertFalse(x["pruned"], t)
+        self.assertEqual(b["bank0"]["state"], "in use, calibrated")
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("memory         : xclbin 97613339", o)
+        self.assertIn("PLRAM2", o)
+        rc, o, e = run_cli(h, ["status", "--json"])
+        self.assertEqual(len(json.loads(o)["memory"]["banks"]), 6)
+        r = self.check(h)
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        self.assertNotIn("mem.bank_not_ready", self.rules(r))
+
+    def test_memory_is_passive(self):
+        h = MockHost(0x0B5E0007)
+        load_xclbin(h, [1] * 6, [(0, 0, 0)])
+        run_cli(h, ["memory"])
+        self.assertEqual(h.model.writes, [])
+        self.assertFalse([c for c in h.runs if "examine" in c or any("xbutil" in x or "xrt-smi" in x for x in c)])
+
+    def test_plram2_unused_may_be_pruned(self):
+        h = MockHost(0x0B5E0007)
+        load_xclbin(h, [1, 0, 1, 1, 0, 0], [(0, 0, 0), (0, 1, 2), (1, 1, 3)])
+        b = self.banks(h)
+        p2 = b["PLRAM2"]
+        self.assertFalse(p2["used"])
+        self.assertEqual(p2["state"], "unused (may be pruned)")
+        self.assertIsNone(p2["pruned"], "no marker reaches the xclbin: PRUNED must not be claimed")
+        self.assertIn("no marker", p2["evidence"])
+        self.assertEqual(b["HOST"]["state"], "unused (may be pruned)")
+        self.assertEqual(b["PLRAM0"]["state"], "in use, RP released")
+        rc, o, e = run_cli(h, ["memory"])
+        self.assertNotIn("PRUNED", o.replace("PRUNED is shown only where verifiable", ""))
+        self.assertEqual(self.check(h)["severity"], "OK")
+        h.attrs_[(USER, "icap.u.1/mem_topology")] = mem_topology([0, 1, 1, 1, 0, 0])
+        self.assertEqual(self.banks(h)["bank0"]["state"], "unused (static DDR: never pruned)")
+
+    def test_used_bank_not_ready_fails(self):
+        h = MockHost(0x0B5E0007)
+        load_xclbin(h, [1, 0, 0, 0, 1, 0], [(0, 0, 0), (1, 0, 4)])
+        h.model.r[0x00] &= ~(1 << 28)                       # DDR gate closed: not calibrated
+        r = self.check(h)
+        bad = [i for i in r["items"] if i["rule"] == "mem.bank_not_ready"]
+        self.assertEqual({i["message"].split()[1] for i in bad}, {"bank0", "HOST"})   # HOST: host_mem_size 0
+        self.assertEqual(r["severity"], "FAIL")
+        self.assertIn("mem.bank_not_ready", C.render(r))
+
+    def test_routev_pruned_ddr(self):
+        h = MockHost(RV)
+        h.model.set_pruned()
+        load_xclbin(h, [0, 1, 1, 1, 0, 0], [(0, 1, 2), (1, 1, 3), (2, 1, 1)])
+        b = self.banks(h)["bank0"]
+        self.assertEqual((b["state"], b["pruned"], b["used"]), ("PRUNED", True, False))
+        self.assertIn("RV_INFO[0]=0", b["evidence"])
+        r = self.check(h)
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        self.assertNotIn("mem.ddr_kept_not_ready", self.rules(r))
+        rc, o, e = run_cli(h, ["status"])
+        self.assertRegex(o, r"bank0 +DDR +DDR4 .* no +PRUNED")
+
+    def test_routev_kept(self):
+        h = MockHost(RV)
+        load_xclbin(h, [1, 0, 0, 0, 0, 0], [(0, 0, 0)])
+        b = self.banks(h)["bank0"]
+        self.assertEqual((b["state"], b["pruned"], b["ready"]), ("KEPT, calibrated", False, True))
+        self.assertEqual(self.check(h)["severity"], "OK")
+        h.model.rv["cal"] = False                            # KEPT while ddr_ready=0
+        r = self.check(h)
+        self.assertIn("mem.ddr_kept_not_ready", self.rules(r, "WARN"))
+        self.assertIn("mem.bank_not_ready", self.rules(r, "FAIL"))
+        h = MockHost(RV)                                     # KEPT, ddr_ready=0, no mem_topology: still the WARN
+        h.model.rv["cal"] = False
+        self.assertIn("mem.ddr_kept_not_ready", self.rules(self.check(h), "WARN"))
+
+    def test_no_xclbin(self):
+        h = MockHost(0x0B5E0007)
+        h.attrs_.update({(USER, "xclbinuuid"): "00000000-0000-0000-0000-000000000000",
+                         (USER, "icap.u.1/mem_topology"): b""})
+        rc, o, e = run_cli(h, ["memory"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("no xclbin loaded", o)
+        r = self.check(h)
+        self.assertIn("mem.no_xclbin", self.rules(r, "INFO"))
+        self.assertEqual(r["severity"], "OK")
+        rc, o, e = run_cli(h, ["status", "--json"])
+        self.assertFalse(json.loads(o)["memory"]["xclbin_loaded"])
+
+    def test_unreadable_is_info(self):
+        r = self.check(MockHost(0x0B5E0007))                 # the default mock has no icap sysfs
+        self.assertIn("mem.unavailable", self.rules(r, "INFO"))
+        self.assertEqual(r["severity"], "OK")
+
+    def test_old_shell_uses_xrt_calibration(self):
+        h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.0", "rom.m.1/VBNV"): R.VBNV_OLD,
+                                              ("0000:08:00.0", "mig_calibration"): "0"})
+        load_xclbin(h, [1, 0, 0, 0, 0, 0], [(0, 0, 0)])
+        b = self.banks(h)["bank0"]
+        self.assertEqual((b["ready"], b["state"]), (False, "in use, NOT CALIBRATED"))
+        self.assertIn("mig_calibration=0", b["evidence"])
+        self.assertEqual(h.model.reads, [], "an unmapped shell's registers are never read")
+        self.assertIn("mem.bank_not_ready", self.rules(self.check(h), "FAIL"))
+
+    def test_parsers_roundtrip(self):
+        m = H.parse_mem_topology(mem_topology([1, 0, 1, 1, 0, 1]) * 2)       # two slot copies
+        self.assertEqual(len(m), 12)
+        self.assertEqual((m[6]["slot"], m[6]["index"], m[6]["tag"]), (1, 0, "bank0"))
+        self.assertEqual(H.parse_ip_layout(ip_layout(["k:a", "k:b"]))[1][2], "k:b")
+        self.assertEqual(H.parse_connectivity(connectivity([(0, 1, 2)])), [(0, 1, 2)])
+
+
+class BoardIdTests(unittest.TestCase):
+    def test_empty_vpd_prints_what_is_there(self):
+        h = MockHost(0x0B5E0007)
+        h.attrs_[("0000:09:00.0", "vpd")] = b"\x78"           # hpz440's card: the VPD is only the end tag
+        h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/board_id"] = b"MT_0000000158"
+        h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/fw_ver"] = b"16.28.2006"
+        rc, o, e = run_cli(h, ["list"])
+        self.assertEqual(rc, 0, e)
+        self.assertNotIn("?", o.splitlines()[0])
+        self.assertIn("VPD empty; PSID MT_0000000158 fw 16.28.2006", o)
+        self.assertNotIn("NOT a validated board", o)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("board          : VPD empty", o)
+        r = C.run_check(h, H.discover(h)[0], interval=0)
+        self.assertIn("identity.vpd_empty", [i["rule"] for i in r["items"] if i["severity"] == "WARN"])
+        self.assertNotIn("identity.board", [i["rule"] for i in r["items"]])
+        rc, o, e = run_cli(h, ["list", "--json"])
+        j = json.loads(o)[0]
+        self.assertEqual((j["vpd_empty"], j["psid"], j["board_validated"]), (True, "MT_0000000158", None))
+
+    def test_normal_vpd_unchanged(self):
+        h = MockHost(0x0B5E0007)
+        rc, o, e = run_cli(h, ["list"])
+        self.assertIn("serial MT1935X08327  board MNV303212A-ADLT rev A7", o)

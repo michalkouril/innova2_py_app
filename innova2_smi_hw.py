@@ -378,18 +378,49 @@ def classify(host, card, query_cx5=True, transport="auto"):
     return card
 
 
+def cx5_fw_ident(host, nic):
+    """PSID and firmware version from the RDMA device's sysfs (board_id / fw_ver): present even on a card whose VPD is
+    blank. Read-only, no firmware command."""
+    out = {}
+    for p in host.glob("/sys/bus/pci/devices/%s/infiniband/*/board_id" % nic):
+        out["psid"] = host.read_file(p)
+        out["fw_ver"] = host.read_file(os.path.join(os.path.dirname(p), "fw_ver"))
+        break
+    return out
+
+
 def board_id(host, card):
+    """The board identity from the ConnectX-5 VPD (PN, EC, SN), plus the PSID / firmware from sysfs.
+    Some cards carry an EMPTY VPD (only the end tag; measured on hpz440's card, whose base GUID and MAC are blank
+    too): then vpd_empty=True and validated=None (unknown -- not 'not validated')."""
     if not card["cx5"]:
         return dict(error="no ConnectX-5 on this card")
     nic = card["cx5"][0]
     raw = host.bounded(lambda: host.raw(nic, "vpd"), 10, None)
+    fw = cx5_fw_ident(host, nic)
     if not raw:
-        return dict(error="cannot read the VPD of %s (root needed, or it timed out)" % nic, nic=nic)
+        return dict(error="cannot read the VPD of %s (root needed, or it timed out)" % nic, nic=nic, **fw)
     v = R.parse_vpd(raw)
     v["nic"] = nic
+    v.update(fw)
     pn, ec = v.get("PN"), v.get("EC")
-    v["validated"] = (pn, ec) in R.VALIDATED_BOARDS
+    v["vpd_empty"] = not any(v.get(k) for k in ("PN", "EC", "SN", "name"))
+    v["validated"] = None if v["vpd_empty"] else (pn, ec) in R.VALIDATED_BOARDS
     return v
+
+
+def board_summary(b):
+    """One line for list/status: what the VPD holds, never a bare '?'."""
+    fw = (", PSID %s, fw %s" % (b["psid"], b.get("fw_ver"))) if b.get("psid") else ""
+    if "error" in b:
+        return "unknown (%s)%s" % (b["error"], fw)
+    if b.get("vpd_empty"):
+        return "VPD empty (no PN/EC/SN in this ConnectX-5's VPD)%s -- board not identifiable, cannot be validated" % fw
+    missing = [k for k in ("PN", "EC", "SN") if not b.get(k)]
+    return "%s rev %s, serial %s%s -- %s" % (
+        b.get("PN") or "(no PN)", b.get("EC") or "(no EC)", b.get("SN") or "(no SN)",
+        (" (the VPD has no %s)" % "/".join(missing)) if missing else "",
+        "validated board" if b.get("validated") else "*** NOT a validated board: the DDR4 part may differ from " + R.DDR_PART)
 
 
 def select_card(cards, want):
@@ -864,6 +895,187 @@ def xrt_state(sh):
                 user_ready=h.attr(sh.user, "ready") if sh.user else None,
                 xclbin_uuid=h.attr(sh.user, "xclbinuuid") if sh.user else None,
                 xrt_tool=h.which_xrt())
+
+
+# ----------------------------------------------------------------------------------------------- memory banks
+# The loaded xclbin's memory banks, from xocl's sysfs copies of the xclbin sections under the user PF
+# (<user>/icap.u.*/mem_topology, ip_layout, connectivity -- XRT 2.19; binary, the axlf structs of xclbin.h).
+# PASSIVE: no XRT context, no xrt-smi/xbutil (one examine adds ~400 correctable AER errors on x440's weak link), no
+# xclbin load. Reading mem_topology makes xocl do ONE register load of its own: the HMA address translator's range
+# register (xocl reports the HOST bank's size from it), the same load xocl does for every memstat / xbutil read.
+MEM_TYPES = ("DDR3", "DDR4", "DRAM", "STREAMING", "PREALLOCATED_GLOB", "ARE", "HBM", "BRAM", "URAM",
+             "STREAMING_CONNECTION", "HOST", "PS_KERNEL")
+NO_MARKER = ("used=0 in the xclbin's mem_topology; the prune hooks embed no marker in the xclbin, so whether the path "
+             "was replaced by a zero slave cannot be verified from the host")
+
+
+def parse_mem_topology(b):
+    """struct mem_topology (int32 m_count, then 40-byte mem_data from offset 8). xocl concatenates one copy per slot;
+    every copy is returned with its slot number."""
+    import struct
+    out, pos, slot = [], 0, 0
+    while b and pos + 8 <= len(b):
+        n = struct.unpack_from("<i", b, pos)[0]
+        if n <= 0 or pos + 8 + 40 * n > len(b):
+            break
+        for i in range(n):
+            t, used, size_kb, base = struct.unpack_from("<BB6xQQ", b, pos + 8 + 40 * i)
+            tag = b[pos + 8 + 40 * i + 24:pos + 8 + 40 * i + 40].split(b"\0")[0].decode("ascii", "replace")
+            out.append(dict(slot=slot, index=i, type=MEM_TYPES[t] if t < len(MEM_TYPES) else "type%d" % t,
+                            used=bool(used), size_bytes=size_kb * 1024, base=base, tag=tag))
+        pos += 8 + 40 * n
+        slot += 1
+    return out
+
+
+def parse_ip_layout(b):
+    """struct ip_layout (int32 m_count, then 80-byte ip_data from offset 8): [(type, base, name)]."""
+    import struct
+    if not b or len(b) < 8:
+        return []
+    n = struct.unpack_from("<i", b, 0)[0]
+    out = []
+    for i in range(max(0, n)):
+        o = 8 + 80 * i
+        if o + 80 > len(b):
+            break
+        t, _, base = struct.unpack_from("<IIQ", b, o)
+        out.append((t, base, b[o + 16:o + 80].split(b"\0")[0].decode("ascii", "replace")))
+    return out
+
+
+def parse_connectivity(b):
+    """struct connectivity (int32 m_count, then 12-byte connection from offset 4): [(arg, ip index, mem index)]."""
+    import struct
+    if not b or len(b) < 4:
+        return []
+    n = struct.unpack_from("<i", b, 0)[0]
+    return [struct.unpack_from("<iii", b, 4 + 12 * i) for i in range(max(0, n)) if 4 + 12 * i + 12 <= len(b)]
+
+
+def bank_kind(tag, mtype):
+    t = tag.upper()
+    if mtype == "HOST" or t.startswith("HOST"):
+        return "HOST"
+    for k, pre in (("DDR", ("BANK", "DDR")), ("PLRAM", ("PLRAM",)), ("PEER", ("PEER",)), ("HBM", ("HBM",))):
+        if t.startswith(pre):
+            return k
+    return "OTHER"
+
+
+def mem_context(host, card, sh=None, regs=None, memcalib=None):
+    """What makes a bank ready, from loads the running shell's map allows (or XRT's sysfs on a shell this tool does not
+    map). regs/memcalib: a check snapshot, so check reads nothing twice."""
+    user, mgmt = card.get("user"), card.get("mgmt")
+    ctx = dict(routev=False, ddr_ready=None, ddr_ready_source=None, rp_released=None, ddr_kept=None,
+               platform=sh.vbnv if sh else None)
+    if sh is not None and sh.ok:
+        rd = (lambda o: regs[o]) if regs is not None else sh.r
+        status = rd(0x00)
+        mc = memcalib if memcalib is not None else sh.io.rd(R.MEMCALIB)
+        if R.is_routev(sh.lay):
+            info = rd(0x1C0)
+            ctx.update(routev=True, ddr_kept=bool(info & 1), ddr_ready=bool(info >> 1 & 1), rp_released=bool(info >> 4 & 1),
+                       ddr_ready_source="RV_INFO 0x%08x: [0] KEPT %d, [1] ddr_ready AND RP released %d, [4] RP released %d"
+                                        % (info, info & 1, info >> 1 & 1, info >> 4 & 1))
+        else:
+            gate = status >> 28 & 1
+            ctx.update(ddr_ready=bool(gate and mc & 1),
+                       ddr_ready_source="ddr_health gate %s, XRT calibration bit %d" % ("open" if gate else "CLOSED", mc & 1))
+            if sh.lay["e7"]:
+                ctx["rp_released"] = bool(rd(0x128) & 1)
+    elif mgmt and host.driver(mgmt) == "xclmgmt":
+        v = (host.attr(mgmt, "mig_calibration") or "").strip()
+        if v in ("0", "1"):
+            ctx.update(ddr_ready=v == "1", ddr_ready_source="xclmgmt sysfs mig_calibration=%s" % v)
+    if user:
+        hm = host.attr(user, "host_mem_size")
+        ctx["host_mem_size"] = int(hm) if hm and hm.isdigit() else None
+        en = host.attr(user, "p2p.*/p2p_enable")
+        ctx["p2p_enabled"] = None if en is None else en.strip() == "1"
+    return ctx
+
+
+def _bank_state(b, ctx):
+    """(ready, state, pruned, evidence) of one bank. pruned: True (verified), False (verified kept), None (unknown)."""
+    k, used = b["kind"], b["used"]
+    if k == "DDR" and ctx.get("routev"):
+        if ctx.get("rp_released") is False:
+            return (False if used else None), "RP ISOLATED (an xclbin load in progress?): KEPT/PRUNED unknown", None, \
+                ctx["ddr_ready_source"]
+        if ctx.get("ddr_kept"):
+            ev = "the loaded RM carries the MIG (%s)" % ctx["ddr_ready_source"]
+            if used:
+                return ctx["ddr_ready"], "KEPT, %s" % ("calibrated" if ctx["ddr_ready"] else "NOT READY (ddr_ready=0)"), \
+                    False, ev
+            return None, "KEPT but unused by any kernel (hook/xclbin mismatch?)", False, ev
+        ev = "used=%d in mem_topology and RV_INFO[0]=0: the loaded RM has no MIG (prune_ddr.tcl's filler)" % used
+        if used:
+            return False, "PRUNED but used by kernels (no MIG behind it)", True, ev
+        return None, "PRUNED", True, ev
+    if not used:
+        if k == "DDR" and ctx.get("platform") == R.VBNV_FP8C:
+            return None, "unused (static DDR: never pruned)", False, "the fp8c MIG is in the static region"
+        if k in ("PLRAM", "HOST", "PEER"):
+            return None, "unused (may be pruned)", None, NO_MARKER
+        return None, "unused", None, "used=0 in the xclbin's mem_topology"
+    if k == "DDR":
+        r = ctx.get("ddr_ready")
+        return r, "in use, %s" % {True: "calibrated", False: "NOT CALIBRATED", None: "calibration unknown"}[r], False, \
+            ctx.get("ddr_ready_source") or "no calibration source"
+    if k == "PLRAM":
+        r = ctx.get("rp_released")
+        return r, "in use%s" % {True: ", RP released", False: ", NOT READY (RP isolated)", None: ""}[r], False, \
+            "PLRAM is on-chip RAM in the dynamic region: ready once the RP is released"
+    if k == "HOST":
+        hm = ctx.get("host_mem_size")
+        r = None if hm is None else hm > 0
+        return r, "in use%s" % {True: ", host memory %d MB reserved" % ((hm or 0) >> 20), False:
+                                ", NOT READY (no host memory reserved: xrt-smi configure --host-mem)", None: ""}[r], False, \
+            "xocl host_mem_size=%s" % hm
+    if k == "PEER":
+        r = ctx.get("p2p_enabled")
+        return r, "in use%s" % {True: ", P2P enabled", False: ", NOT READY (P2P disabled)", None: ""}[r], False, \
+            "xocl p2p_enable=%s" % r
+    return None, "in use", None, ""
+
+
+def xrt_memory(host, card, sh=None, ctx=None):
+    """Every memory bank of the loaded xclbin: tag, kind, type, base, size, used, the CU arguments connected to it,
+    ready, and the prune state (PRUNED only where it is verifiable). See the block comment above for what is read."""
+    user = card.get("user")
+    if not user:
+        return dict(available=False, reason="no user PF (10ee:6a90) on this card")
+    drv = host.driver(user)
+    if drv != "xocl":
+        return dict(available=False, reason="the user PF %s is not bound to xocl (driver %s)" % (user, drv or "none"))
+    uuid = (host.attr(user, "xclbinuuid") or "").strip()
+    mt = host.raw(user, "icap.*/mem_topology", 1 << 20)
+    src = "/sys/bus/pci/devices/%s/icap.*/{mem_topology,ip_layout,connectivity}" % user
+    if mt is None:
+        return dict(available=False, reason="no icap mem_topology under %s (xocl too old or icap not probed)" % user,
+                    xclbin_uuid=uuid or None)
+    banks = parse_mem_topology(mt)
+    loaded = bool(uuid.replace("-", "").strip("0")) and bool(banks)
+    out = dict(available=True, source=src, xclbin_uuid=uuid or None, xclbin_loaded=loaded, banks=[],
+               prune_marker=dict(found=False, note="no prune marker reaches the xclbin (prune_unused.tcl writes none; "
+                                                   "prune_ddr.tcl writes prune_ddr_marker.json in the build tree only); "
+                                                   "route V's DDR state is read from the shell instead (RV_INFO)"))
+    if not loaded:
+        out["reason"] = "no xclbin loaded" if not banks else "xclbinuuid is %r" % uuid
+        return out
+    ips = parse_ip_layout(host.raw(user, "icap.*/ip_layout", 1 << 20) or b"")
+    conns = parse_connectivity(host.raw(user, "icap.*/connectivity", 1 << 20) or b"")
+    ctx = ctx if ctx is not None else mem_context(host, card, sh)
+    out["context"] = ctx
+    for b in banks:
+        b["kind"] = bank_kind(b["tag"], b["type"])
+        b["connections"] = ["%s.arg%d" % (ips[ip][2].split(":")[-1], arg) for arg, ip, mi in conns
+                            if mi == b["index"] and 0 <= ip < len(ips)] if b["slot"] == 0 else []
+        b["ready"], b["state"], b["pruned"], b["evidence"] = _bank_state(b, ctx)
+        b["base"] = "0x%x" % b["base"]
+        out["banks"].append(b)
+    return out
 
 
 def counters(sh):
