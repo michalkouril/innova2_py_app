@@ -1747,3 +1747,212 @@ class DdrSpeedTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("not available on this shell", o)
         self.assertEqual(h.model.reads, [])
+
+
+# ---- 1.3.5: the warm-reboot fenced write (ddr.fenced_linkdown_benign) and xbutil PASSED WITH WARNINGS
+def _fence(n=1, ld=1, read=False, addr=0x200000000, after_s=0.3, ts=True):
+    """n fenced accesses, the first a write (or read) at addr, after ld link-downs; the last link-down at FPGA uptime
+    50 s (before the mock host booted at 60 s) and the last fenced access after_s later (E7 timestamps)."""
+    def f(h):
+        m = h.model
+        m.r[0x10] = 0x00050000 | ld
+        m.r[0xA0] = n
+        m.r[0xA4] = 1 << 31 | (1 << 30 if read else 0)
+        m.r[0xA8], m.r[0xAC] = addr & 0xFFFFFFFF, addr >> 32
+        if ts:
+            m.r[0xE0] = int(50 / R.TS_S)
+            m.r[0xF0] = int((50 + after_s) / R.TS_S)
+    return f
+
+
+def _rec(m, typ, t, payload=0):
+    m.records.append((typ, payload, int(t / R.REC_S)))
+
+
+def _hpy440(fence_at=205.822379, shift=-170.0):
+    """hpy440 2026-10-07 (innova2-smi recorder): ONE warm reboot gives TWO link-downs 5.6 s apart and the single fence
+    lands in the FIRST window (0.54 s after LINK_DOWN 1, before its RECAL_DONE); the registers see only the last
+    link-down, 5.06 s after the fence. Times as measured, shifted by `shift` so they precede the mock host's boot."""
+    def f(h):
+        m = h.model
+        _fence(n=1, ld=2, ts=False)(h)
+        m.r[0xE0], m.r[0xF0] = int((210.882117 + shift) / R.TS_S), int((fence_at + shift) / R.TS_S)
+        for typ, t in ((2, 205.284475), (15, 205.802003), (7, fence_at), (3, 206.295772), (2, 210.882117),
+                       (15, 211.400133), (3, 211.893878)):
+            _rec(m, typ, t + shift)
+        m.records.sort(key=lambda r: r[2])
+    return f
+
+
+def _rec_too(setup):
+    def f(h):
+        setup(h)
+        _rec(h.model, 2, 50.0)
+        _rec(h.model, 7, 50.3)
+        _rec(h.model, 3, 51.0)
+    return f
+
+
+FENCE_SCENARIOS = [
+    ("benign: 1 write at 0x200000000 in the window", 0x0B5E0006, _fence(), "ddr.fenced_linkdown_benign", "INFO"),
+    ("benign: 2 writes, 3 link-downs", 0x0B5E0007, _fence(n=2, ld=3), "ddr.fenced_linkdown_benign", "INFO"),
+    ("benign without timestamps (E4)", 0x0B5E0002, _fence(ts=False), "ddr.fenced_linkdown_benign", "INFO"),
+    ("2 fences, 1 link-down", 0x0B5E0006, _fence(n=2), "ddr.fenced", "WARN"),
+    ("fence without a link-down", 0x0B5E0006, _fence(ld=0), "ddr.fenced", "WARN"),
+    ("a read", 0x0B5E0006, _fence(read=True), "ddr.fenced", "WARN"),
+    ("another address", 0x0B5E0006, _fence(addr=0x200001000), "ddr.fenced", "WARN"),
+    ("another address, no timestamps (E4)", 0x0B5E0002, _fence(addr=0x0, ts=False), "ddr.fenced", "WARN"),
+    ("outside the link-down window", 0x0B5E0006, _fence(after_s=30), "ddr.fenced", "WARN"),
+    ("before the last link-down", 0x0B5E0006, _fence(after_s=-5), "ddr.fenced", "WARN"),
+    ("E7 without timestamps", 0x0B5E0006, _fence(ts=False), "ddr.fenced", "WARN"),
+    ("hpy440 pattern, passive: fence before the last of 2 link-downs", 0x0B5E0007, _hpy440(), "ddr.fenced", "WARN"),
+    ("hpy440 pattern, --recorder: fence inside the first window", 0x0B5E0007, _hpy440(), "ddr.fenced_linkdown_benign",
+     "INFO", True),
+    ("--recorder: FENCE record between windows", 0x0B5E0007, _hpy440(fence_at=208.0), "ddr.fenced", "WARN", True),
+    ("--recorder: the single-link-down benign case", 0x0B5E0006, _rec_too(_fence()), "ddr.fenced_linkdown_benign",
+     "INFO", True),
+]
+
+
+def fence_failures(fence=None):
+    """Run every fence scenario; return the descriptions the check did NOT classify as expected."""
+    saved = C.fence_items
+    if fence is not None:
+        C.fence_items = fence
+    bad = []
+    try:
+        for desc, oid, setup, rule, sev, *rec in FENCE_SCENARIOS:
+            h = MockHost(oid)
+            setup(h)
+            r = C.run_check(h, H.discover(h)[0], interval=1.0, recorder=bool(rec))
+            got = [(i["rule"], i["severity"]) for i in r["items"] if i["rule"].startswith("ddr.fenced")]
+            want_sev = "OK" if sev == "INFO" else sev
+            if got != [(rule, sev)] or r["severity"] != want_sev:
+                bad.append(desc)
+    finally:
+        C.fence_items = saved
+    return bad
+
+
+class FencedLinkDownTests(unittest.TestCase):
+    def test_scenarios(self):
+        self.assertEqual(fence_failures(), [])
+
+    def test_benign_is_info_with_evidence(self):
+        h = MockHost(0x0B5E0006)
+        _fence()(h)
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
+        it = [i for i in r["items"] if i["rule"] == "ddr.fenced_linkdown_benign"][0]
+        self.assertEqual(it["severity"], "INFO")
+        self.assertEqual(it["evidence"]["first"], "write at 0x200000000")
+        self.assertAlmostEqual(it["evidence"]["fence_after_link_down_s"], 0.3, places=2)
+        self.assertIn("E7 event timestamps", it["evidence"]["timing"])
+        self.assertEqual(run_cli(h, ["check"])[0], 0)
+        self.assertIn("ddr.fenced_linkdown_benign", run_cli(h, ["check", "-v"])[1])
+
+    def test_no_timestamps_says_so(self):
+        h = MockHost(0x0B5E0002)
+        _fence(ts=False)(h)
+        it = [i for i in C.run_check(h, H.discover(h)[0])["items"] if i["rule"] == "ddr.fenced_linkdown_benign"][0]
+        self.assertIn("no event timestamps", it["evidence"]["timing"])
+        self.assertIn("count, address and link-down count only", it["evidence"]["timing"])
+
+    def test_warn_says_why(self):
+        for setup, why in ((_fence(n=2), "2 fenced accesses > 1 link-downs"), (_fence(read=True), "is a read"),
+                           (_fence(addr=0x1000), "address 0x1000"), (_fence(after_s=30), "outside the link-down")):
+            h = MockHost(0x0B5E0006)
+            setup(h)
+            it = [i for i in C.run_check(h, H.discover(h)[0])["items"] if i["rule"] == "ddr.fenced"][0]
+            self.assertIn(why, it["evidence"]["not_benign"])
+
+    def test_routev_kept_fence_still_fails(self):
+        h = MockHost(RV)
+        _fence()(h)                                          # the benign signature, but while KEPT
+        h.model.rv["fence_kept"] = 1
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertIn("ddr.fenced_kept", [i["rule"] for i in r["items"] if i["severity"] == "FAIL"])
+        self.assertNotIn("ddr.fenced_linkdown_benign", [i["rule"] for i in r["items"]])
+
+    def test_mutant_every_fence_benign_is_caught(self):
+        def all_benign(sh, regs, recorder=None):
+            return [dict(i, rule="ddr.fenced_linkdown_benign", severity="INFO") for i in C_FENCE(sh, regs, recorder)]
+        bad = fence_failures(fence=all_benign)
+        for d in ("2 fences, 1 link-down", "a read", "another address", "outside the link-down window",
+                  "--recorder: FENCE record between windows"):
+            self.assertIn(d, bad)
+
+    def test_mutant_recorder_ignored_is_caught(self):
+        self.assertIn("hpy440 pattern, --recorder: fence inside the first window", fence_failures(
+            fence=lambda sh, regs, recorder=None: C_FENCE(sh, regs)))
+
+    def test_passive_by_default_recorder_only_on_request(self):
+        h = MockHost(0x0B5E0007)
+        _hpy440()(h)
+        r = C.run_check(h, H.discover(h)[0])
+        self.assertEqual(h.model.writes, [])
+        it = [i for i in r["items"] if i["rule"] == "ddr.fenced"][0]
+        self.assertIn("check --recorder", it["evidence"]["not_benign"])
+        rc, o, e = run_cli(h, ["check", "--recorder", "-v"])
+        self.assertEqual(rc, 0, o)
+        self.assertIn("ddr.fenced_linkdown_benign", o)
+        self.assertIn("flight recorder (check --recorder)", o)
+        h = MockHost(0x0B5E0007)                             # no fence: --recorder stays passive too
+        run_cli(h, ["check", "--recorder"])
+        self.assertEqual(h.model.writes, [])
+
+
+C_FENCE = C.fence_items
+
+# real xbutil output, card 03 on x440 (x4 link): work/logs/e7a3ca48_c03/08b_pcie_link_raw.txt
+XBUTIL_PCIE_WARN = """\
+    Platform              : innova2_innova2_xdma_202320_3
+    SC Version            : n/a
+    Platform ID           : 0x6ad6cb20
+-------------------------------------------------------------------------------
+Test 1 [0000:03:00.1]     : pcie-link 
+    Description           : Check if PCIE link is active
+    Warning(s)            : Link is active
+                            Please make sure that the device is plugged into Gen 3x8,
+                            instead of Gen 3x4. Lower performance maybe experienced.
+    Test Status           : [PASSED WITH WARNINGS]
+-------------------------------------------------------------------------------
+Test 2 [0000:03:00.1]     : sc-version 
+    Description           : Check if SC firmware is up-to-date
+    Test Status           : [PASSED]
+-------------------------------------------------------------------------------
+Test 3 [0000:03:00.1]     : aux-connection 
+    Description           : Check if auxiliary power is connected
+    Details               : Aux power connector is not available on this board
+    Test Status           : [SKIPPED]
+-------------------------------------------------------------------------------
+Validation completed, but with warnings
+"""
+
+
+class ValidateWarningsTests(unittest.TestCase):
+    def test_passed_with_warnings_parses_as_pass(self):
+        t = {x["test"]: x for x in T.parse_validate(XBUTIL_PCIE_WARN)}
+        self.assertEqual(t["pcie-link"]["status"], "PASSED")
+        self.assertEqual(t["pcie-link"]["raw_status"], "PASSED WITH WARNINGS")
+        self.assertEqual(t["pcie-link"]["warnings"], ["Link is active Please make sure that the device is plugged into "
+                                                      "Gen 3x8, instead of Gen 3x4. Lower performance maybe "
+                                                      "experienced."])
+        self.assertEqual((t["sc-version"]["status"], t["sc-version"]["warnings"]), ("PASSED", []))
+        self.assertEqual(t["aux-connection"]["status"], "SKIPPED")
+
+    def test_verdict_counts_it_and_shows_the_warning(self):
+        st, summ, ev = T.validate_verdict(T.parse_validate(XBUTIL_PCIE_WARN), dict(ue=0))
+        self.assertEqual(st, "PASS")
+        self.assertIn("2 passed (pcie-link, sc-version), 1 skipped", summ)
+        self.assertIn("note: 1 passed with warnings (pcie-link: Link is active", summ)
+        self.assertIn("Gen 3x4", summ)
+        self.assertTrue(any("PASSED WITH WARNINGS" in e for e in ev))
+        self.assertTrue(any("warning: Link is active" in e for e in ev))
+
+    def test_warning_alone_still_passes_and_failure_still_fails(self):
+        only = XBUTIL_PCIE_WARN.split("Test 2")[0]
+        st, summ, _ = T.validate_verdict(T.parse_validate(only), dict(ue=0))
+        self.assertEqual((st, summ.split(";")[0]), ("PASS", "1 passed (pcie-link), 0 skipped"))
+        failed = XBUTIL_PCIE_WARN.replace("[PASSED]", "[FAILED]")
+        self.assertEqual(T.validate_verdict(T.parse_validate(failed), dict(ue=0))[0], "FAIL")

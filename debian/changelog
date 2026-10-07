@@ -1,3 +1,24 @@
+innova2-app (1.3.5) unstable; urgency=medium
+
+  * innova2-smi check: the one DDR write fenced in a warm reboot's link-down
+    window is INFO ddr.fenced_linkdown_benign, not WARN ddr.fenced, only when
+    the fenced count is <= the link-downs since configuration, the first
+    fenced access is a write at 0x200000000 and, on E7 shells, the last
+    fenced access lies within 2 s after the last link-down (link-down ->
+    recalibration measured 1.12 s). Shells without event timestamps are
+    judged on count, address and link-down count, and the evidence says so.
+    Anything else stays WARN ddr.fenced (with the reason); route V's
+    fenced-while-KEPT stays FAIL. A fence before the last of several
+    link-downs (hpy440: two link-downs per warm reboot, the fence in the
+    first) cannot be placed from the registers: 'check --recorder' (opt-in,
+    stores to the flight-recorder index) requires every FENCE record to lie
+    in a LINK_DOWN..RECAL_DONE window.
+  * innova2-smi test validate: xbutil's "[PASSED WITH WARNINGS]" (pcie-link
+    on an x4 link) counts as passed; the warning text is shown and the PASS
+    verdict carries a note instead of dropping the test.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Wed, 07 Oct 2026 07:43:56 -0400
+
 innova2-app (1.3.4) unstable; urgency=medium
 
   * innova2-smi status/check: the interface uuid is read passively from

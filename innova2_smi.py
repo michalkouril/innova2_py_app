@@ -39,7 +39,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 
 
 def _version():
@@ -527,7 +527,8 @@ def cmd_check(host, args):
         return 2
     sel = cs if (args.all or (args.device is None and len(cs) > 1)) else [H.select_card(cs, args.device)]
     interval = 0 if getattr(args, "since_boot", False) else args.interval
-    res = [C.run_check(host, c, interval=interval, expect_mode=args.expect_mode, query_cx5=not args.no_cx5) for c in sel]
+    res = [C.run_check(host, c, interval=interval, expect_mode=args.expect_mode, query_cx5=not args.no_cx5,
+                       recorder=getattr(args, "recorder", False)) for c in sel]
     if args.json:
         print(H.jdump(res if len(res) > 1 else res[0]))
     else:
@@ -997,8 +998,8 @@ def build_parser():
     q.add_argument("-v", "--verbose", action="store_true", help=argparse.SUPPRESS)
     q = add("check", cmd_check, "passive concerns-only check; exit 0 OK, 1 WARN, 2 FAIL",
             epilog="Strictly passive: register LOADS through the shell's map, sysfs, the xrt-smi device table. No "
-                   "store (not even the recorder index), no xclbin, no DMA, no XRT context. 'check --rules' lists "
-                   "every rule, its severity, threshold and hint.")
+                   "store (not even the recorder index), no xclbin, no DMA, no XRT context -- unless --recorder. "
+                   "'check --rules' lists every rule, its severity, threshold and hint.")
     q.add_argument("--all", action="store_true", help="every card (default when -d is not given and there are several)")
     g = q.add_mutually_exclusive_group()
     g.add_argument("--interval", type=float, default=1.0, help="seconds between the two snapshots (default 1)")
@@ -1007,6 +1008,9 @@ def build_parser():
                    help="the DDR mode this card should be in (default on; '' = any)")
     q.add_argument("-v", "--verbose", action="store_true", help="also show INFO (known benign) items")
     q.add_argument("--rules", action="store_true", help="print the rules table and exit")
+    q.add_argument("--recorder", action="store_true",
+                   help="when DDR accesses were fenced, read the flight recorder (stores to its index register; no "
+                        "longer strictly passive) to place every fence in a link-down window")
     q = add("ecc-baseline", cmd_ecc_baseline, "record ECC counts now; 'check' then judges only new errors")
     g = q.add_mutually_exclusive_group()
     g.add_argument("--show", action="store_true", help="print the stored baseline")

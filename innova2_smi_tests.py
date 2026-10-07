@@ -106,19 +106,64 @@ def run_xrt(sh, args, timeout=900):
 
 
 def parse_validate(out):
-    tests, cur = [], None
+    """xbutil/xrt-smi validate --verbose -> [dict(test, status, details, warnings)]. "[PASSED WITH WARNINGS]" (e.g.
+    pcie-link on an x4 link) is status PASSED with warnings=[text] and raw_status kept: a pass, never dropped."""
+    tests, cur, in_warn = [], None, False
     for line in out.splitlines():
         m = re.match(r"\s*Test \d+ \[[^\]]+\]\s*:\s*(\S+)", line)
         if m:
-            cur = dict(test=m.group(1), status=None, details=[])
+            cur = dict(test=m.group(1), status=None, details=[], warnings=[])
             tests.append(cur)
+            in_warn = False
             continue
-        m = re.search(r"Test Status\s*:\s*\[(\w+)\]", line)
-        if m and cur:
-            cur["status"] = m.group(1)
-        elif cur and ("Details" in line or "bandwidth" in line.lower() or "Throughput" in line or "Error" in line):
+        if line.strip().startswith("Validation completed"):
+            cur = None
+        if not cur:
+            continue
+        m = re.search(r"Test Status\s*:\s*\[([A-Z][A-Z ]*?)\s*\]", line)
+        if m:
+            raw = m.group(1)
+            cur["status"] = "PASSED" if raw.startswith("PASSED") else raw
+            if raw != cur["status"]:
+                cur["raw_status"] = raw
+            in_warn = False
+            continue
+        m = re.match(r"\s*Warning\(?s?\)?\s*:\s*(.*)", line)
+        if m:
+            cur["warnings"].append(m.group(1).strip())
+            in_warn = True
+            continue
+        if in_warn and line.strip() and " : " not in line and not line.strip().startswith("---"):
+            cur["warnings"][-1] = (cur["warnings"][-1] + " " + line.strip()).strip()
+            continue
+        in_warn = False
+        if "Details" in line or "bandwidth" in line.lower() or "Throughput" in line or "Error" in line:
             cur["details"].append(line.strip())
     return tests
+
+
+def validate_verdict(tests, dl):
+    """(status, summary, evidence lines) for parsed validate tests and the ECC/fence delta. PASSED WITH WARNINGS
+    counts as passed; the overall PASS then carries a note with the warning text."""
+    ev = []
+    for t in tests:
+        st = t.get("raw_status") or t["status"]
+        ev.append("%-14s %s %s" % (t["test"], st, " | ".join(t["details"][:3])))
+        for w in t.get("warnings", []):
+            ev.append("%-14s   warning: %s" % ("", w))
+    ev.append("ECC/fence deltas: %s" % dl)
+    failed = [t["test"] for t in tests if t["status"] == "FAILED"]
+    passed = [t["test"] for t in tests if t["status"] == "PASSED"]
+    warned = [t for t in tests if t["status"] == "PASSED" and t.get("warnings")]
+    if failed or not passed or dl["ue"] > 0:
+        return "FAIL", "failed: %s%s" % (", ".join(failed) or "no test passed",
+                                         "; UE +%d" % dl["ue"] if dl["ue"] else ""), ev
+    summ = "%d passed (%s), %d skipped" % (len(passed), ", ".join(passed),
+                                            len([t for t in tests if t["status"] == "SKIPPED"]))
+    if warned:
+        summ += "; note: %d passed with warnings (%s)" % (len(warned), "; ".join(
+            "%s: %s" % (t["test"], " / ".join(t["warnings"])) for t in warned))
+    return "PASS", summ, ev
 
 
 # ----------------------------------------------------------------------------------------------- read-only tests
@@ -265,17 +310,10 @@ def t_validate(sh, args, confirm):
     tests = parse_validate(out)
     e1 = ecc_snap(sh)
     dl = ecc_delta(e0, e1)
-    ev = ["%-14s %s %s" % (t["test"], t["status"], " | ".join(t["details"][:3])) for t in tests]
-    ev.append("ECC/fence deltas: %s" % dl)
-    failed = [t["test"] for t in tests if t["status"] == "FAILED"]
-    passed = [t["test"] for t in tests if t["status"] == "PASSED"]
-    if failed or not passed or dl["ue"] > 0:
-        return result(name, "FAIL", "failed: %s%s" % (", ".join(failed) or "no test passed",
-                                                      "; UE +%d" % dl["ue"] if dl["ue"] else ""), ev, rc=rc,
-                      tests=tests, output_tail=out[-2000:])
-    return result(name, "PASS", "%d passed (%s), %d skipped" % (len(passed), ", ".join(passed),
-                                                                  len([t for t in tests if t["status"] == "SKIPPED"])),
-                  ev, tests=tests)
+    status, summ, ev = validate_verdict(tests, dl)
+    if status == "FAIL":
+        return result(name, "FAIL", summ, ev, rc=rc, tests=tests, output_tail=out[-2000:])
+    return result(name, "PASS", summ, ev, tests=tests)
 
 
 def t_p2p(sh, args, confirm):

@@ -88,8 +88,23 @@ RULES = {
                                                     "(cold boot / reflash since): judged on the totals; take a new one"),
     "ddr.baseline":           dict(sev="INFO", hint="ECC judged against the host-side ecc-baseline "
                                                     "(~/.cache/innova2-smi/ecc_baseline_<mgmt BDF>.json)"),
-    "ddr.fenced":             dict(sev="WARN", hint="something accessed DDR while it was fenced (often one write in "
-                                                    "the link-down window of a warm reboot)"),
+    "ddr.fenced":             dict(sev="WARN", hint="something accessed DDR while it was fenced, and it is not the "
+                                                    "known benign link-down write (see ddr.fenced_linkdown_benign): "
+                                                    "more accesses than link-downs, a read, another address, or outside "
+                                                    "a link-down window"),
+    "ddr.fenced_linkdown_benign": dict(sev="INFO", address=0x200000000, threshold=2.0,
+                                       hint="known benign: a warm reboot's link-down window fences one host write to "
+                                            "DDR 0x200000000 (almost every warm reboot, every card). Benign only "
+                                            "if: fenced count <= link-downs since configuration, the first fenced "
+                                            "access is a write at 0x200000000, and (E7 shells, event timestamps) the "
+                                            "last fenced access lies within threshold s after the last link-down "
+                                            "(link-down -> recalibration measured 1.12 s). Shells without "
+                                            "timestamps are judged on count, address and link-down count only. A "
+                                            "fence BEFORE the last of several link-downs (hpy440: two link-downs "
+                                            "per warm reboot, the fence in the first) needs 'check --recorder': "
+                                            "every FENCE record must then lie in a LINK_DOWN..RECAL_DONE window"),
+    "ddr.recorder_unreadable": dict(sev="WARN", hint="check --recorder could not read the flight recorder; the "
+                                                     "fenced-access rule fell back to the registers"),
     "ddr.link_down_rising":   dict(sev="WARN", hint="the PCIe link dropped during the check interval"),
     "ddr.link_down_count":    dict(sev="INFO", hint="link-downs since configuration (each warm reboot adds one)"),
     "ddr.rate_mismatch":      dict(sev="WARN", threshold=1.0, hint="the MIG ui_clk measured from the ECC poll count "
@@ -213,7 +228,7 @@ def snapshot(sh):
     return s
 
 
-def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None):
+def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None, recorder=None):
     """Rules over one or two snapshots. Returns the list of items (INFO, WARN and FAIL). `baseline` is a usable
     'innova2-smi ecc-baseline' record (H.load_ecc_baseline + H.baseline_usable), or None."""
     items = []
@@ -266,11 +281,8 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None):
         if fall > fk:
             items.append(_item("ddr.fenced_pruned", "%d DDR accesses fenced while no DDR was loaded" % (fall - fk),
                                dict(fenced_total=fall, fenced_while_kept=fk)))
-    elif rd(0xA0):
-        ev = dict(count=rd(0xA0))
-        if rd(0xA4) >> 31 & 1:
-            ev["first"] = "%s at 0x%x" % ("read" if rd(0xA4) >> 30 & 1 else "write", rd(0xAC) << 32 | rd(0xA8))
-        items.append(_item("ddr.fenced", "%d fenced DDR accesses" % rd(0xA0), ev))
+    else:
+        items += fence_items(sh, regs, recorder=recorder)
     ld = rd(0x10) & 0xFFFF
     if s1 and (delta(0x10) & 0xFFFF):
         items.append(_item("ddr.link_down_rising", "link-down count rose by %d in %.1f s" % (delta(0x10) & 0xFFFF, dt),
@@ -468,11 +480,95 @@ def evaluate(sh, s0, s1=None, expect_mode="on", board=None, baseline=None):
             ts = rd(o) * R.TS_S
             if baseline and o in (0xE8, 0xEC) and ts <= baseline["uptime_s"]:
                 continue                            # acknowledged by the ECC baseline
+            if o == 0xF0 and any(i["rule"] == "ddr.fenced_linkdown_benign" for i in items):
+                continue                            # the benign link-down fence (classified above)
             if rd(o) and ts > boot_at:
                 items.append(_item("event.since_boot", "last %s at FPGA uptime %.1f s, after the host booted "
                                    "(%.1f s)" % (n, ts, max(boot_at, 0)), dict(event=n, at_s=round(ts, 3),
                                                                                host_boot_at_s=round(boot_at, 3))))
     return items
+
+
+def fence_windows(records, limit_s):
+    """Flight-recorder records -> [(LINK_DOWN time, end)] with end = the RECAL_DONE that follows it (before the next
+    LINK_DOWN), else LINK_DOWN + limit_s."""
+    lds = [r for r in records if r["type"] in ("LINK_DOWN", "RECAL_DONE")]
+    out = []
+    for i, r in enumerate(lds):
+        if r["type"] != "LINK_DOWN":
+            continue
+        nxt = lds[i + 1] if i + 1 < len(lds) else None
+        out.append((r["time_s"], nxt["time_s"] if nxt and nxt["type"] == "RECAL_DONE" else r["time_s"] + limit_s))
+    return out
+
+
+def fence_items(sh, regs, recorder=None):
+    """Fenced DDR accesses outside route V (route V has its own KEPT / PRUNED split). The count (0xA0) is cumulative
+    since configuration; the shell captures only the FIRST fenced access (0xA4 read flag, 0xA8/0xAC address).
+
+      * count <= link-downs since configuration, the first is a WRITE at 0x200000000, and (E7 shells) the last fenced
+        access lies within threshold s after the last link-down                -> INFO ddr.fenced_linkdown_benign
+      * anything else (more accesses, a read, another address, no capture, outside the window, no timestamp)
+                                                                             -> WARN ddr.fenced
+    Same pattern as clk.icap_benign: a measured, every-card artefact is INFO only inside its exact signature."""
+    rd = lambda o: regs.get(o, 0)
+    n = rd(0xA0)
+    if not n:
+        return []
+    rule = RULES["ddr.fenced_linkdown_benign"]
+    ld = rd(0x10) & 0xFFFF
+    a4 = rd(0xA4)
+    valid, is_read, addr = a4 >> 31 & 1, a4 >> 30 & 1, rd(0xAC) << 32 | rd(0xA8)
+    ev = dict(count=n, link_downs=ld)
+    if valid:
+        ev["first"] = "%s at 0x%x" % ("read" if is_read else "write", addr)
+    why = []
+    if n > ld:
+        why.append("%d fenced accesses > %d link-downs since configuration" % (n, ld))
+    if not valid:
+        why.append("no first-access capture")
+    elif is_read:
+        why.append("the first fenced access is a read")
+    elif addr != rule["address"]:
+        why.append("address 0x%x, not 0x%x" % (addr, rule["address"]))
+    if recorder is not None:
+        inf, recs = recorder
+        wins = fence_windows(recs, rule["threshold"])
+        fences = [r["time_s"] for r in recs if r["type"] == "FENCE"]
+        outside = [t for t in fences if not any(a <= t <= b for a, b in wins)]
+        ev.update(timing="flight recorder (check --recorder): every FENCE record inside a LINK_DOWN..RECAL_DONE "
+                         "window", fence_records=len(fences), fence_at_s=[round(t, 3) for t in fences[:8]],
+                  link_down_windows_s=["%.3f..%.3f" % w for w in wins[:8]])
+        if inf.get("wraps"):
+            why.append("the flight recorder wrapped: earlier FENCE records are lost")
+        if not fences:
+            why.append("no FENCE record in the flight recorder")
+        if outside:
+            why.append("%d FENCE record(s) outside every link-down window (first at %.3f s)" % (len(outside), outside[0]))
+    elif sh.lay["e7"]:
+        tf, tl = rd(0xF0), rd(0xE0)
+        ev.update(last_fenced_at_s=round(tf * R.TS_S, 3) if tf else None,
+                  last_link_down_at_s=round(tl * R.TS_S, 3) if tl else None, window_s=rule["threshold"],
+                  timing="last fenced access vs last link-down (E7 event timestamps)")
+        if not (tf and tl):
+            why.append("no %s timestamp" % ("fenced-access" if not tf else "link-down"))
+        else:
+            d = (((tf - tl) & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000       # signed: TS wraps after ~13 days
+            ev["fence_after_link_down_s"] = round(d * R.TS_S, 3)
+            if d < 0 and ld >= 2:
+                why.append("the last fenced access is %.3f s BEFORE the last link-down: the registers cannot place it "
+                           "in an earlier link-down window ('innova2-smi check --recorder' can)" % (-d * R.TS_S))
+            elif not 0 <= d * R.TS_S <= rule["threshold"]:
+                why.append("the last fenced access is %.3f s from the last link-down, outside the link-down "
+                           "window (0..%.1f s)" % (d * R.TS_S, rule["threshold"]))
+    else:
+        ev["timing"] = "not checked: this shell has no event timestamps (judged on count, address and link-down " \
+                       "count only)"
+    if why:
+        ev["not_benign"] = "; ".join(why)
+        return [_item("ddr.fenced", "%d fenced DDR accesses" % n, ev)]
+    return [_item("ddr.fenced_linkdown_benign", "%d fenced DDR write%s at 0x%x in a link-down window (%d link-downs)"
+                  % (n, "s" if n > 1 else "", addr, ld), ev)]
 
 
 def ecc_items(sh, s0, s1=None, baseline=None):
@@ -667,8 +763,10 @@ def card_items(host, card):
     return items
 
 
-def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
-    """Everything for one card. Returns dict(card, identity, items, severity)."""
+def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True, recorder=False):
+    """Everything for one card. Returns dict(card, identity, items, severity). recorder=True (check --recorder) lets
+    the fenced-access rule read the flight recorder -- index-register STORES -- when a fence needs placing; without it
+    the check is strictly passive."""
     if "state" not in card:
         H.classify(host, card, query_cx5=query_cx5)
     card.setdefault("cx5_health", H.cx5_health(host, card))
@@ -717,7 +815,14 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True):
         base = b
         items.append(_item("ddr.baseline", "ECC counted since the ecc-baseline at FPGA uptime %.1f s: CE %d, UE polls %d "
                            "then" % (b["uptime_s"], b["ce"], b["ue_polls"]), dict(file=bpath)))
-    items += evaluate(sh, s0, s1, expect_mode=expect_mode, baseline=base)
+    rec = None
+    lr = (s1 or s0)["regs"]
+    if recorder and sh.lay["e7"] and not R.is_routev(sh.lay) and lr.get(0xA0, 0):
+        try:
+            rec = H.recorder(sh)
+        except H.Refused as e:
+            items.append(_item("ddr.recorder_unreadable", "flight recorder not readable: %s" % e, {}))
+    items += evaluate(sh, s0, s1, expect_mode=expect_mode, baseline=base, recorder=rec)
     last = s1 or s0
     ctx = H.mem_context(host, card, sh, regs=last["regs"], memcalib=last["memcalib"])
     items += routev_mem_items(ctx)
