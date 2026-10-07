@@ -273,9 +273,12 @@ def render_status(st):
         # route V: the DDR is part of the loaded xclbin (KEPT) or absent (PRUNED); a closed gate is normal when PRUNED
         if rv.get("xclbin_loaded", True):
             head = "xclbin %s" % ("KEPT (MIG in the dynamic region)" if rv["ddr_present"] else "PRUNED (no DDR in this xclbin)")
-        else:                       # nothing loaded since power-on: the flash image's own RM (r1 KEPT template, r2 filler)
+        elif rv.get("boot_rm"):     # nothing loaded since power-on: the flash image's own RM (r1 KEPT template, r2 filler)
             head = "no xclbin (boot RM: %s)" % ("KEPT template, MIG in the dynamic region" if rv["ddr_present"]
                                                 else "filler, no DDR")
+        else:                       # XRT refused the last load (e.g. a KEPT MIG that never calibrated): its RM stays
+            head = "no xclbin registered by XRT (RP holds the %s RM of a refused load)" % (
+                "KEPT, MIG in the dynamic region" if rv["ddr_present"] else "PRUNED")
         L.append("DDR (route V)  : %s, %s, %s, XRT calibration bit %d; mode %s (requested %s%s)" % (
             head,
             ("calibrated" if rv["calibrated"] else "NOT CALIBRATED") if rv["ddr_present"] else "nothing to calibrate",
@@ -297,7 +300,7 @@ def render_status(st):
                                                             di["ui_clk_mhz_measured"], di["ui_clk_mhz_expected"]))
         else:
             L.append("  DDR config   : %s (DDR_INFO magic %s)" % (("no DDR in this xclbin" if rv.get("xclbin_loaded", True)
-                                                                  else "no DDR in the boot RM") if di["no_ddr"] else "not reported",
+                                                                  else "no DDR in the loaded RM") if di["no_ddr"] else "not reported",
                                                                  di["magic"]))
         el = rv["ecc_this_load"]
         L.append("  this load    : ECC %d corrected, %d uncorrectable polls%s, %d polls" % (

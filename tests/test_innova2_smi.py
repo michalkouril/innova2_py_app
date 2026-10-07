@@ -1484,7 +1484,7 @@ class RouteV2Tests(unittest.TestCase):
         rc, o, e = run_cli(h, ["status"])
         self.assertIn("DDR (route V)  : no xclbin (boot RM: filler, no DDR)", o)
         self.assertNotIn("xclbin KEPT", o)
-        self.assertIn("no DDR in the boot RM", o)
+        self.assertIn("no DDR in the loaded RM", o)
         st = json.loads(run_cli(h, ["status", "--json"])[1])["routev"]
         self.assertEqual((st["xclbin_loaded"], st["boot_rm"], st["xclbin_ddr"]), (False, "filler", "PRUNED"))
         r = self.check(h)
@@ -1497,6 +1497,15 @@ class RouteV2Tests(unittest.TestCase):
         h = self.boot(RV, pruned=False)
         self.assertIn("no xclbin (boot RM: KEPT template)", run_cli(h, ["list"])[1])
         self.assertIn("no xclbin (boot RM: KEPT template, MIG in the dynamic region)", run_cli(h, ["status"])[1])
+
+    def test_refused_kept_load_is_not_the_boot_rm(self):
+        h = self.boot(pruned=False)                          # XRT refused a KEPT load (MIG timeout): uuid zero, PR done
+        h.model.rv["cal"] = False
+        h.model.r[0x120] = 4
+        o = run_cli(h, ["status"])[1]
+        self.assertIn("no xclbin registered by XRT (RP holds the KEPT, MIG in the dynamic region RM of a refused load)", o)
+        self.assertNotIn("no xclbin (boot RM", o)
+        self.assertIsNone(json.loads(run_cli(h, ["status", "--json"])[1])["routev"]["boot_rm"])
 
     def test_loaded_xclbin_wording_unchanged(self):
         h = MockHost(RV2)

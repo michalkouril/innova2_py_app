@@ -654,11 +654,17 @@ def rm_state(sh, ddr_present):
         loaded, src = pr_count != 0, "PR_COUNT %d (no xocl xclbinuuid; a CLEAR zeroes PR_COUNT)" % pr_count
     kind = "KEPT template" if ddr_present else "filler"
     known = (R.SHELLS.get(sh.rom_ts) or {}).get("boot_rm")
+    # XRT registers no xclbin after a REFUSED load either (route V: a KEPT load whose MIG never calibrates): then the
+    # RP has been reconfigured (PR_COUNT > 0) and holds that load's RM, not the boot RM
+    boot = not loaded and pr_count == 0
     if loaded:
         label = "xclbin %s" % ("KEPT" if ddr_present else "PRUNED")
-    else:
+    elif boot:
         label = "no xclbin (boot RM: %s)" % kind
-    return dict(xclbin_loaded=loaded, xclbin_loaded_source=src, boot_rm=None if loaded else kind,
+    else:
+        label = "no xclbin registered by XRT (the RP holds the %s RM of an unregistered / refused load)" % (
+            "KEPT" if ddr_present else "PRUNED")
+    return dict(xclbin_loaded=loaded, xclbin_loaded_source=src, boot_rm=kind if boot else None,
                 boot_rm_build=known, rm_label=label, pr_isolations=pr_count, xclbin_loads_estimate=pr_count // 2)
 
 
