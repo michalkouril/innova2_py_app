@@ -141,6 +141,12 @@ Fixed registers: 0x32000 [0] XRT calibration bit; 0x32008 [1:0] requested DDR mo
 | 0x1F0 | TS_CAL | r | 8 | timestamp of the last calibration completed |
 | 0x1F4 | TS_FENCE_KEPT | r | 8 | timestamp of the last fence while KEPT |
 | 0x1F8 | TS_LOAD | r | 8 | timestamp of the last load settle (KEPT/PRUNED counted) |
+| 0x200 | DDR_INFO0 | r | 8 | [15:0] tCK ps [31:16] magic 0xD4D4 = DDR in this xclbin (KEPT), 0x0D0D = no DDR (PRUNED); latched at load settle, 0 while isolated |
+| 0x204 | DDR_INFO1 | r | 8 | [7:0] CL [15:8] CWL [23:16] tRCD nCK [31:24] tRP nCK |
+| 0x208 | DDR_INFO2 | r | 8 | [7:0] DQ width [8] ECC on [11:9] CA drive (0 RDRV_40_40, 1 48_48, 2 60_60) [15:12] MIG variant (1 mwrnd833, 2 dw8_833, 3 e6b750) |
+| 0x20C | DDR_INFO3 | r | 8 | part id: CRC32 of the custom-parts CSV + MemoryPart (0 = built-in part) |
+| 0x210 | UI_CLK_EDGES | r | 8 | MIG ui_clk/2^SHIFT rising edges in the last 2^WIN aclk window (0 = no valid window) |
+| 0x214 | UI_CLK_CFG | r | 8 | [7:0] WIN (log2 aclk cycles) [15:8] SHIFT [16] the last window was valid |
 
 Layout column: the last hex digit of the OBS_IDs that decode the offset (1 = full, 2 = E4 layout, 3 = E7a, 4 = E7b, 5 = E7a2, 6 = E7a3, 7 = E7a3-2666ca48, 8 = route V).
 

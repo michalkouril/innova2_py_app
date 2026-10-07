@@ -252,6 +252,16 @@ def render_status(st):
                      rv["loads_kept"], rv["loads_pruned"], rv["calibrations"], rv["calibrations_lost"],
                      rv["last_calibration_ms"], rv["fenced_while_kept"], "released" if rv["rp_released"] else "ISOLATED",
                      "present" if rv["ecc_poller"] else "absent"))
+        di = rv["ddr_info"]
+        if di["kept"]:
+            L.append("  DDR config   : DDR4-%d (tCK %d ps), CL%d CWL%d tRCD %d tRP %d, %d-bit%s, CA %s, MIG %s, part %s; ui_clk "
+                     "measured %.3f MHz (expected %.3f)" % (di["mts"], di["tck_ps"], di["cl"], di["cwl"], di["trcd"],
+                                                            di["trp"], di["dq_width"], " ECC" if di["ecc"] else "",
+                                                            di["ca_drive"], di["mig_variant"], di["part_id"],
+                                                            di["ui_clk_mhz_measured"], di["ui_clk_mhz_expected"]))
+        else:
+            L.append("  DDR config   : %s (DDR_INFO magic %s)" % ("no DDR in this xclbin" if di["no_ddr"] else "not reported",
+                                                                 di["magic"]))
         el = rv["ecc_this_load"]
         L.append("  this load    : ECC %d corrected, %d uncorrectable polls%s, %d polls" % (
             el["ce"], el["ue_polls"], " (UE SEEN)" if el["ue_seen"] else "", el["polls"]))

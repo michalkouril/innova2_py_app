@@ -577,6 +577,7 @@ def routev(sh):
                ecc_this_load=dict(ce=sh.r(0x1D0), ue_polls=uel & 0xFFFF, polled=bool(uel >> 29 & 1),
                                   ue_seen=bool(uel >> 31 & 1), polls=sh.r(0x1D8)),
                fenced_while_kept=sh.r(0x1EC), raw_info="0x%08x" % i)
+    out["ddr_info"] = R.decode_ddr_info(sh.r(0x200), sh.r(0x204), sh.r(0x208), sh.r(0x20C), sh.r(0x210), sh.r(0x214))
     for name, lo, hi in (("first_ce", 0x1DC, 0x1E0), ("first_ue", 0x1E4, 0x1E8)):
         h = sh.r(hi)
         out["ecc_this_load"][name] = R.decode_ffa((h & 0x7FFFFFFF) << 32 | sh.r(lo)) if h >> 31 & 1 else None

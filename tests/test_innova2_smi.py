@@ -42,7 +42,7 @@ _E7 = [0xc0, 0xc4, 0xc8, 0xcc, 0xd0, 0xd4, 0xe0, 0xe4, 0xe8, 0xec, 0xf0, 0xf4, 0
 _E7A3 = [0xd8, 0xdc, 0x140, 0x144, 0x148, 0x14c, 0x150, 0x154]
 _MON = [0x40, 0x44, 0x48, 0x4c, 0x50, 0x54, 0x60, 0x64, 0x68, 0x6c, 0x70, 0x74, 0x80, 0x84, 0x88, 0x8c, 0x90, 0x94]
 # route V (OBS_ID 0x0B5E0008): clkx300fp8c_routev_src/ip_src/ddr_health/ddr_health.v, 10'h070..10'h07E
-_RV = list(range(0x1c0, 0x1fc, 4))
+_RV = list(range(0x1c0, 0x1fc, 4)) + list(range(0x200, 0x218, 4))
 RTL_DECODE = {0x0B5E0002: _BASE, 0x0B5E0004: _BASE + _E7 + _MON, 0x0B5E0005: _BASE + _E7,
               0x0B5E0006: _BASE + _E7 + _E7A3, 0x0B5E0007: _BASE + _E7 + _E7A3, 0x0B5E0008: _BASE + _E7 + _E7A3 + _RV}
 ROM_TS = {0x0B5E0002: 1792371600, 0x0B5E0004: 1792000004, 0x0B5E0005: 1792281600, 0x0B5E0006: 1792458000,
@@ -196,6 +196,16 @@ class Model:
             return int(self.now() * 1000) if ok else 0
         if o == 0x1EC:
             return rv["fence_kept"]
+        if o == 0x200:
+            return (0xD4D4 << 16 | 750) if rv["kept"] else 0x0D0D0000
+        if o == 0x204:
+            return 0x14141213 if rv["kept"] else 0
+        if o == 0x208:
+            return 0x3348 if rv["kept"] else 0
+        if o == 0x210:
+            return 10923 if rv["kept"] else 0         # 333.3 MHz / 128 over 2^20 aclk (4.19 ms)
+        if o == 0x214:
+            return (rv["kept"] << 16) | 7 << 8 | 20
         return self.r.get(o, 0)
 
     # -- bus
@@ -213,7 +223,7 @@ class Model:
         if 0xA0400 <= off < 0xA0800:
             return self.sysmon.get((off - 0xA0400) // 4, 0)
         o = off - 0x36000
-        if self.routev and 0x1C0 <= o <= 0x1F8:
+        if self.routev and 0x1C0 <= o <= 0x214:
             return self._rv_reg(o)
         if self.routev and o == 0x00:                    # gate open only while a KEPT xclbin is calibrated
             ok = self.rv["kept"] and self.rv["cal"] and self.rv["released"]
@@ -1069,6 +1079,10 @@ class RouteVTests(unittest.TestCase):
         self.assertEqual(rc, 0, e)
         self.assertIn("xclbin KEPT (MIG in the dynamic region), calibrated, window gate open", o)
         self.assertIn("this load", o)
+        self.assertIn("DDR4-2667 (tCK 750 ps), CL19 CWL18 tRCD 20 tRP 20, 72-bit ECC, CA RDRV_48_48, MIG e6b750", o)
+        rc, o, e = run_cli(h, ["status", "--json"])
+        di = json.loads(o)["routev"]["ddr_info"]
+        self.assertAlmostEqual(di["ui_clk_mhz_measured"], 333.3, delta=1.0)
         h.model.set_pruned()
         rc, o, e = run_cli(h, ["status", "--json"])
         st = json.loads(o)
@@ -1077,6 +1091,7 @@ class RouteVTests(unittest.TestCase):
         rc, o, e = run_cli(h, ["status"])
         self.assertIn("PRUNED (no DDR in this xclbin)", o)
         self.assertIn("window fenced (expected: no DDR)", o)
+        self.assertIn("no DDR in this xclbin (DDR_INFO magic 0x0D0D)", o)
 
     def test_check_pruned_is_normal(self):
         h = MockHost(RV)

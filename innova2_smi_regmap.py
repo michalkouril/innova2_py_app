@@ -174,7 +174,33 @@ _RV = {
     0x1F0: ("TS_CAL", "r", "timestamp of the last calibration completed"),
     0x1F4: ("TS_FENCE_KEPT", "r", "timestamp of the last fence while KEPT"),
     0x1F8: ("TS_LOAD", "r", "timestamp of the last load settle (KEPT/PRUNED counted)"),
+    # DDR_INFO (owner 2026-10-06): the loaded xclbin's MIG configuration, reported by the RM, and the MEASURED ui_clk
+    0x200: ("DDR_INFO0", "r", "[15:0] tCK ps [31:16] magic 0xD4D4 = DDR in this xclbin (KEPT), 0x0D0D = no DDR (PRUNED); "
+                              "latched at load settle, 0 while isolated"),
+    0x204: ("DDR_INFO1", "r", "[7:0] CL [15:8] CWL [23:16] tRCD nCK [31:24] tRP nCK"),
+    0x208: ("DDR_INFO2", "r", "[7:0] DQ width [8] ECC on [11:9] CA drive (0 RDRV_40_40, 1 48_48, 2 60_60) [15:12] MIG "
+                              "variant (1 mwrnd833, 2 dw8_833, 3 e6b750)"),
+    0x20C: ("DDR_INFO3", "r", "part id: CRC32 of the custom-parts CSV + MemoryPart (0 = built-in part)"),
+    0x210: ("UI_CLK_EDGES", "r", "MIG ui_clk/2^SHIFT rising edges in the last 2^WIN aclk window (0 = no valid window)"),
+    0x214: ("UI_CLK_CFG", "r", "[7:0] WIN (log2 aclk cycles) [15:8] SHIFT [16] the last window was valid"),
 }
+DDR_KEPT_MAGIC, DDR_NONE_MAGIC = 0xD4D4, 0x0D0D
+CA_CODES = {0: "RDRV_40_40", 1: "RDRV_48_48", 2: "RDRV_60_60"}
+MIG_VARIANTS = {1: "mwrnd833", 2: "dw8_833", 3: "e6b750"}
+
+
+def decode_ddr_info(w0, w1, w2, w3, edges, cfg):
+    """route V DDR_INFO -> dict (tCK, MT/s, CL/CWL/tRCD/tRP, width, ECC, CA drive, variant, part id, measured ui_clk)."""
+    magic = w0 >> 16
+    win, shift, valid = cfg & 0xFF, cfg >> 8 & 0xFF, bool(cfg >> 16 & 1)
+    ui_hz = edges * (1 << shift) * ACLK_HZ / (1 << win) if (valid and win) else 0.0
+    tck = w0 & 0xFFFF
+    return dict(magic="0x%04X" % magic, kept=magic == DDR_KEPT_MAGIC, no_ddr=magic == DDR_NONE_MAGIC,
+                tck_ps=tck, mts=round(2e6 / tck) if tck else 0, cl=w1 & 0xFF, cwl=w1 >> 8 & 0xFF,
+                trcd=w1 >> 16 & 0xFF, trp=w1 >> 24 & 0xFF, dq_width=w2 & 0xFF, ecc=bool(w2 >> 8 & 1),
+                ca_drive=CA_CODES.get(w2 >> 9 & 7, "?"), mig_variant=MIG_VARIANTS.get(w2 >> 12 & 0xF, "?"),
+                part_id="0x%08x" % w3, ui_clk_mhz_measured=round(ui_hz / 1e6, 3), ui_clk_window_valid=valid,
+                ui_clk_mhz_expected=round(1e6 / (4 * tck), 3) if tck else 0.0)
 RV_SIGNATURE = 0x5256
 
 
@@ -311,7 +337,19 @@ MIG_BUILDS = {
 }
 # Route V's planned DDR_INFO block (MIG constants + a ui_clk counter, from the template) replaces the table and the poll
 # estimate when its OBS_ID layout lists it: {obs_id: {"regs": {offset: (name, decoder)}}}. Empty until that map exists.
-DDR_INFO_MAPS = {}
+# route V DDR_INFO block (mgmt 0x36200..0x36214): {"regs": {offset: (name, decoder)}} for `innova2-smi ddr`
+DDR_INFO_MAPS = {
+    0x0B5E0008: dict(regs={
+        0x200: ("info0_tck_ps_magic", lambda v: "tCK %d ps, magic 0x%04X%s" % (v & 0xFFFF, v >> 16,
+                {DDR_KEPT_MAGIC: " (KEPT)", DDR_NONE_MAGIC: " (no DDR)"}.get(v >> 16, " (?)"))),
+        0x204: ("info1_cl_cwl_trcd_trp", lambda v: "CL%d CWL%d tRCD %d tRP %d" % (v & 0xFF, v >> 8 & 0xFF, v >> 16 & 0xFF, v >> 24)),
+        0x208: ("info2_width_ecc_ca_variant", lambda v: "%d-bit, ECC %s, CA %s, MIG %s" % (
+            v & 0xFF, "on" if v >> 8 & 1 else "off", CA_CODES.get(v >> 9 & 7, "?"), MIG_VARIANTS.get(v >> 12 & 0xF, "?"))),
+        0x20C: ("info3_part_id", lambda v: "0x%08x" % v),
+        0x210: ("ui_clk_edges", lambda v: str(v)),
+        0x214: ("ui_clk_cfg", lambda v: "window 2^%d aclk, divider 2^%d, valid %d" % (v & 0xFF, v >> 8 & 0xFF, v >> 16 & 1)),
+    }),
+}
 
 
 def mig_rates(tck_ps, phy_ratio=4):
