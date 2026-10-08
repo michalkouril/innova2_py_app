@@ -1881,7 +1881,11 @@ class OutputWidthTests(unittest.TestCase):
         st = json.loads(run_cli(h, ["status", "--json"])[1])
         self.assertEqual(len(st["recorder"]["last"]), 10)
         rc, o, e = run_cli(h, ["status"])
-        self.assertIn("last 10:", o)
+        self.assertIn("last 10; now = FPGA uptime", o)
+        self.assertRegex(o, r"\d+\.\d{6} s +\S+( \S+)? ago  THR_TIER")
+        j = json.loads(run_cli(h, ["recorder", "--json"])[1])
+        self.assertTrue(all(0 <= r["ago_s"] <= j["now_s"] for r in j["records"]))
+        self.assertIn("now: FPGA uptime", run_cli(h, ["recorder"])[1])
 
 
 # ----------------------------------------------------------------------------------------------- DDR speed / MIG table

@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.12"
+VERSION = "1.3.13"
 
 
 def _version():
@@ -95,6 +95,27 @@ def open_card(host, args, need_shell=True):
 
 def fmt_bool(b, yes="yes", no="no"):
     return yes if b else no
+
+
+def fmt_dur(sec):
+    """A duration for people: 12.3 s, 4m 05s, 3h 07m, 2d 05h."""
+    sec = max(0.0, sec)
+    if sec < 60:
+        return "%.1f s" % sec
+    m, s_ = divmod(int(sec), 60)
+    if m < 60:
+        return "%dm %02ds" % (m, s_)
+    h, m = divmod(m, 60)
+    if h < 24:
+        return "%dh %02dm" % (h, m)
+    d, h = divmod(h, 24)
+    return "%dd %02dh" % (d, h)
+
+
+def recorder_lines(recs, now_s, indent="  "):
+    """Records with how long ago each happened (now = the FPGA uptime the records are stamped with)."""
+    return ["%s%12.6f s %10s ago  %-12s %s" % (indent, r["time_s"], fmt_dur(now_s - r["time_s"]), r["type"], r["detail"])
+            for r in recs]
 
 
 def out_width():
@@ -165,14 +186,14 @@ def fit_line(line, width):
     m = line.find(": ", lead)
     if 0 < m <= lead + 22:                         # 'label          : ' -- hang under the value
         hang = m + 2
-    else:                                          # '    0.000262 s RM_DDR         detail' -- hang under the detail
-        mm = None
+    else:                                          # a table row ('  0.000262 s ... RM_DDR    detail'): hang under the
+        mm = None                                  # LAST column that starts within the first two thirds of the line
         for k, ch in enumerate(line[lead:], lead):
             if ch == " " and k + 1 < len(line) and line[k + 1] != " " and line[k - 1] == " " and k - lead >= 12:
-                mm = k + 1
-                break
-        hang = mm if mm and mm <= width // 2 else lead + 4
-    hang = min(hang, width // 2)
+                if k + 1 <= width * 2 // 3:
+                    mm = k + 1
+        hang = mm if mm else lead + 4
+    hang = min(hang, width * 2 // 3)
     cur, fresh, lines = line[:hang], True, []    # fresh: nothing on the current line after its label / indent yet
     for piece in split_top(line[hang:]):
         if len(cur) + len(piece) + (0 if fresh else 1) <= width:
@@ -496,10 +517,10 @@ def render_status(st):
             al["reads"]))
     if "recorder" in st:
         r = st["recorder"]
-        L.append("flight recorder: %d written (ring of %d, wrapped %d x); last %d:" % (
-            r["written"], r["entries"], r["wraps"], len(r["last"])))
-        for rec in r["last"]:
-            L.append("  %10.6f s %-14s %s" % (rec["time_s"], rec["type"], rec["detail"]))
+        now = st["uptime"]["seconds"]
+        L.append("flight recorder: %d written (ring of %d, wrapped %d x); last %d; now = FPGA uptime %.6f s (%s):" % (
+            r["written"], r["entries"], r["wraps"], len(r["last"]), now, fmt_dur(now)))
+        L += recorder_lines(r["last"], now)
     if st.get("simulate_hot_pending"):
         L.append("*** a simulate-hot was not restored: innova2-smi throttle restore")
     return "\n".join(L)
@@ -859,10 +880,16 @@ def cmd_recorder(host, args):
     register (FR_IDX), which selects a record and changes nothing else."""
     card, sh = open_card(host, args)
     inf, recs = H.recorder(sh, last=args.n)
+    now = H.uptime(sh)["seconds"]
+    for r in recs:
+        r["ago_s"] = round(now - r["time_s"], 6)
     text = ["flight recorder: %d entries, %d written, wrapped %d x" % (inf["entries"], inf["written"], inf["wraps"]),
-            "%-8s %-16s %-14s %s" % ("index", "time (s)", "event", "detail")]
-    text += ["%-8d %-16.6f %-14s %s" % (r["index"], r["time_s"], r["type"], r["detail"]) for r in recs]
-    out(args, dict(info=inf, records=recs), "\n".join(text))
+            "now: FPGA uptime %.6f s (%s since configuration), read at %s" % (
+                now, fmt_dur(now), time.strftime("%Y-%m-%d %H:%M:%S")),
+            "%-6s %13s %14s  %-12s %s" % ("index", "time (s)", "ago", "event", "detail")]
+    text += ["%-6d %13.6f %10s ago  %-12s %s" % (r["index"], r["time_s"], fmt_dur(now - r["time_s"]), r["type"], r["detail"])
+             for r in recs]
+    out(args, dict(info=inf, now_s=now, records=recs), "\n".join(text))
     return 0
 
 
