@@ -2022,7 +2022,8 @@ class DdrVerdictTests(unittest.TestCase):
         h = MockHost(RV2)
         o, j = self.ddr(h)
         self.assertNotIn("DDR_INFO (raw)", o)
-        self.assertIn("loaded xclbin reports: DDR4-", o)
+        self.assertIn("loaded xclbin's controller (read from the card): DDR4-", o)
+        self.assertIn("configuration: the shell's DDR template", o)
         self.assertIn("DDR_INFO (raw)", run_cli(h, ["ddr", "-v"])[1])
         h.model.write(0x32008, 1)                   # mode off
         self.assertEqual(self.ddr(h)[1]["verdict"]["state"], "DISABLED")

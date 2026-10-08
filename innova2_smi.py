@@ -653,7 +653,12 @@ def render_ddr(d, verbose=False):
         L.append("  xclbin    : %s" % what)
     t = sp.get("table")
     if t:
-        L.append("configuration (from the build: %s)" % sp["table_source"])
+        if t.get("per_xclbin"):
+            L.append("configuration: the shell's DDR template (innova2-smi's table for this shell, ROM_TS %s); "
+                     "each DDR xclbin brings its own controller -- the loaded one's is reported below" % d.get("rom_ts"))
+        else:
+            L.append("configuration: this shell's DDR controller (innova2-smi's table for this shell build, ROM_TS %s)"
+                     % d.get("rom_ts"))
         L.append("  speed     : %s (%.1f MT/s), tCK %d ps, DDR clock %.2f MHz, PHY %d:1, ui_clk %.3f MHz" % (
             t["speed_grade"], t["mts"], t["tck_ps"], t["ddr_clk_mhz"], t["phy_ratio"], t["ui_clk_mhz"]))
         L.append("  timing    : CL %d, CWL %d, tRCD %d, tRP %d, tRAS %d, tRFC %d (DDR4 clocks)" % (
@@ -661,14 +666,11 @@ def render_ddr(d, verbose=False):
         L.append("  interface : %s, ECC %s, CA drive %s, InputClockPeriod %d ps, ECC poll every %d ui_clk" % (
             t["width"], "on" if t["ecc"] else "off", t["ca_drive"], t["input_clk_ps"], t["poll_cyc"]))
         L.append("  part      : %s, %s%s" % (t["variant"], t["part"], ", " + t["part_note"] if t.get("part_note") else ""))
-        if t.get("per_xclbin"):
-            L.append("  note      : route V -- each DDR xclbin carries its own controller; these are the template's "
-                     "values, the loaded xclbin's own are below")
     else:
         L.append("configuration: %s" % sp["table_source"])
     di = (rv or {}).get("ddr_info") or {}
     if di.get("kept"):
-        L.append("loaded xclbin reports: DDR4-%d (tCK %d ps), CL%d CWL%d, %d-bit%s, CA %s, MIG %s, part %s" % (
+        L.append("loaded xclbin's controller (read from the card): DDR4-%d (tCK %d ps), CL%d CWL%d, %d-bit%s, CA %s, MIG %s, part %s" % (
             di["mts"], di["tck_ps"], di["cl"], di["cwl"], di["dq_width"], " ECC" if di["ecc"] else "", di["ca_drive"],
             di["mig_variant"], di["part_id"]))
     if sp.get("ddr_info") and verbose:
@@ -715,7 +717,8 @@ def cmd_ddr(host, args):
                  "unknown build (ROM_TS %s)" % sh.rom_ts)
         out(args, d, render_ddr(d))
         return 1
-    d = dict(available=True, calibration=H.ddr_state(sh), speed=H.ddr_speed(sh, window=args.window), ecc=H.ecc(sh))
+    d = dict(available=True, rom_ts=sh.rom_ts, calibration=H.ddr_state(sh), speed=H.ddr_speed(sh, window=args.window),
+             ecc=H.ecc(sh))
     rv = H.routev(sh)
     if rv:
         d["calibration"]["calibrated"] = rv["calibrated"]
