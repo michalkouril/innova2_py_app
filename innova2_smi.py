@@ -665,14 +665,17 @@ def render_ddr(d, verbose=False):
             t["cl"], t["cwl"], t["trcd"], t["trp"], t["tras"], t["trfc"]))
         L.append("  interface : %s, ECC %s, CA drive %s, InputClockPeriod %d ps, ECC poll every %d ui_clk" % (
             t["width"], "on" if t["ecc"] else "off", t["ca_drive"], t["input_clk_ps"], t["poll_cyc"]))
-        L.append("  part      : %s, %s%s" % (t["variant"], t["part"], ", " + t["part_note"] if t.get("part_note") else ""))
+        L.append("  part      : %s, %s%s -- the part the controller is configured for in the build, not read from "
+                 "the card; the DRAM fitted on the card may differ" % (
+                     t["variant"], t["part"], ", " + t["part_note"] if t.get("part_note") else ""))
     else:
         L.append("configuration: %s" % sp["table_source"])
     di = (rv or {}).get("ddr_info") or {}
     if di.get("kept"):
         L.append("loaded xclbin's controller (read from the card): DDR4-%d (tCK %d ps), CL%d CWL%d, %d-bit%s, CA %s, MIG %s, part %s" % (
             di["mts"], di["tck_ps"], di["cl"], di["cwl"], di["dq_width"], " ECC" if di["ecc"] else "", di["ca_drive"],
-            di["mig_variant"], di["part_id"]))
+            di["mig_variant"], di["part_id"]) + " (configured values; the part ID is the controller's setting, not "
+                                                  "read from the DRAM)")
     if sp.get("ddr_info") and verbose:
         L.append("DDR_INFO (raw): " + ", ".join("%s=%s" % kv for kv in sp["ddr_info"].items()))
     m = sp["measured"]

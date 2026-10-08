@@ -1931,7 +1931,7 @@ class DdrSpeedTests(unittest.TestCase):
         rc, o, e = run_cli(h, ["ddr"])
         for want in ("CL 19, CWL 18, tRCD 20, tRP 20, tRAS 43, tRFC 467", "InputClockPeriod 10000 ps", "PHY 4:1",
                      "measured    : 2667.", "(ui_clk 333.", "ECC         : 0 corrected", "DDR         : OK\n  summary   : calibrated and reachable",
-                     "  access    : open", "  mode      : on -- real DDR"):
+                     "  access    : open", "  mode      : on -- real DDR", "not read from the card"):
             self.assertIn(want, o)
         self.assertEqual(h.model.writes, [])
 
