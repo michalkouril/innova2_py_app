@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.10
+Version: 1.3.11
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -108,6 +108,8 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Thu Oct 08 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.11-0.1
+- ddr: plain verdict first (OK / NOT USABLE / NO DDR IN THIS XCLBIN / ...), explained facts, raw registers behind -v; untested as an RPM.
 * Wed Oct 07 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.10-0.1
 - Error messages fold to the terminal width; untested as an RPM.
 * Wed Oct 07 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.9-0.1

@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.10"
+VERSION = "1.3.11"
 
 
 def _version():
@@ -579,7 +579,41 @@ def ddr_speed_line(sp):
     return "%s; %s" % (tab, meas)
 
 
-def render_ddr(d):
+MODE_MEANING = {"on": "real DDR",
+                "off": "DDR switched off: fenced, controller held in reset (PLRAM-only xclbins still load)",
+                "emu": "emulated: the bottom 1 MB of bank0 is on-chip UltraRAM, the rest is fenced",
+                "hybrid": "real DDR plus a 1 MB on-chip window at the bottom of bank0"}
+
+
+def ddr_verdict(d):
+    """(VERDICT, one sentence) for the first line of 'ddr': what a user can do with DDR right now, and why."""
+    c, e, rv = d["calibration"], d["ecc"], d.get("routev")
+    mode = c["in_force"]
+    if mode == "off":
+        return "DISABLED", "DDR is switched off (mode off); only PLRAM-only xclbins can be used"
+    if mode == "emu":
+        return "EMULATED", "only the bottom 1 MB of bank0 works (on-chip UltraRAM); real DDR is off"
+    if rv is not None and not rv["ddr_present"]:
+        why = ("the boot image's placeholder region has no DDR controller" if rv.get("boot_rm")
+               else "the loaded xclbin was built without DDR")
+        return "NO DDR IN THIS XCLBIN", why + "; load an xclbin whose kernels use bank0 to use DDR"
+    calibrated = rv["calibrated"] if rv is not None else bool(c["xrt_calibration_bit"])
+    if not calibrated:
+        if rv is not None and not rv.get("xclbin_loaded"):
+            return "NOT USABLE", ("the DDR controller of the last load did not calibrate, so XRT refused that xclbin; "
+                                  "DDR access is blocked")
+        return "NOT USABLE", "the DDR controller did not calibrate; DDR access is blocked"
+    if not c["gate_open"]:
+        return "BLOCKED", "calibrated, but the shell's DDR gate is closed (e.g. a link-down reset is in progress)"
+    if e["ue_polls"]:
+        return "ERRORS", "usable, but uncorrectable ECC errors were seen since configuration (see ECC below)"
+    sp = d["speed"].get("measured") or {}
+    rate = ("; measured %.0f MT/s" % sp["mts"]) if sp.get("mts") else ""
+    return "OK", "calibrated and reachable%s; ECC %s, %d corrected / 0 uncorrectable" % (
+        rate, "on" if e["ecc_on"] else "OFF", e["ce"])
+
+
+def render_ddr(d, verbose=False):
     L = []
     if not d.get("available"):
         L.append("DDR: not available on this shell (%s)" % d.get("reason"))
@@ -587,39 +621,75 @@ def render_ddr(d):
             L.append("  XRT mig_calibration (xclmgmt sysfs): %s" % d["xrt_mig_calibration"])
         L.append("  MIG table: %s" % (d["table_source"]))
         return "\n".join(L)
-    c, sp = d["calibration"], d["speed"]
-    L.append("calibration : XRT calibration bit %d, gate %s, mode %s (requested %s)%s" % (
-        c["xrt_calibration_bit"], "open" if c["gate_open"] else "CLOSED", c["in_force"], c["requested"],
-        (", xclbin DDR %s" % c["xclbin_ddr"]) if c.get("xclbin_ddr") else ""))
+    c, sp, rv = d["calibration"], d["speed"], d.get("routev")
+    v, why = ddr_verdict(d)
+    L.append("DDR         : %s%s" % (v, {"NOT USABLE": " (did not calibrate)", "DISABLED": " (mode off)",
+                                          "EMULATED": " (mode emu)", "BLOCKED": " (gate closed)",
+                                          "ERRORS": " (uncorrectable ECC errors)"}.get(v, "")))
+    L.append("  %-9s : %s" % ("summary" if v == "OK" else "why", why))
+    if rv is None or rv["ddr_present"]:
+        cal = rv["calibrated"] if rv is not None else bool(c["xrt_calibration_bit"])
+        L.append("  calibrated: %s (XRT's calibration flag = %d)" % ("yes" if cal else "NO", c["xrt_calibration_bit"]))
+    else:
+        L.append("  calibrated: nothing to calibrate (XRT's calibration flag = %d, reported for a region without DDR)"
+                 % c["xrt_calibration_bit"])
+    if c["gate_open"]:
+        L.append("  access    : open -- host DMA and kernels reach DDR")
+    else:
+        L.append("  access    : blocked -- the shell's DDR gate is closed; reads return 0xBADCA1B0, writes fail "
+                 "(this protects the host)")
+    req = "" if c["requested"] == c["in_force"] else (
+        "; %s was requested%s" % (c["requested"], ", but route V runs on/off only" if rv is not None else ""))
+    L.append("  mode      : %s -- %s%s" % (c["in_force"], MODE_MEANING.get(c["in_force"], "?"), req))
+    if rv is not None:
+        if not rv["ddr_present"]:
+            what = "the boot image's placeholder (no DDR)" if rv.get("boot_rm") else "built without DDR (route V PRUNED)"
+        elif rv.get("xclbin_loaded"):
+            what = "brings its own DDR controller (route V KEPT)"
+        elif rv.get("boot_rm"):
+            what = "the boot image's DDR template (no xclbin loaded yet)"
+        else:
+            what = "a DDR xclbin that XRT refused (its controller is still in the region; load a PLRAM-only xclbin to clear it)"
+        L.append("  xclbin    : %s" % what)
     t = sp.get("table")
     if t:
-        L.append("MIG (table) : %s, %s; %s%s" % (t["variant"], sp["table_source"], t["part"],
-                                                ", " + t["part_note"] if t.get("part_note") else ""))
-        L.append("  rate      : tCK %d ps = DDR clock %.2f MHz, %s (%.1f MT/s), PHY %d:1, ui_clk %.3f MHz" % (
-            t["tck_ps"], t["ddr_clk_mhz"], t["speed_grade"], t["mts"], t["phy_ratio"], t["ui_clk_mhz"]))
+        L.append("configuration (from the build: %s)" % sp["table_source"])
+        L.append("  speed     : %s (%.1f MT/s), tCK %d ps, DDR clock %.2f MHz, PHY %d:1, ui_clk %.3f MHz" % (
+            t["speed_grade"], t["mts"], t["tck_ps"], t["ddr_clk_mhz"], t["phy_ratio"], t["ui_clk_mhz"]))
         L.append("  timing    : CL %d, CWL %d, tRCD %d, tRP %d, tRAS %d, tRFC %d (DDR4 clocks)" % (
             t["cl"], t["cwl"], t["trcd"], t["trp"], t["tras"], t["trfc"]))
-        L.append("  interface : %s, ECC %s, InputClockPeriod %d ps, CA drive %s, ECC poll every %d ui_clk" % (
-            t["width"], "on" if t["ecc"] else "off", t["input_clk_ps"], t["ca_drive"], t["poll_cyc"]))
+        L.append("  interface : %s, ECC %s, CA drive %s, InputClockPeriod %d ps, ECC poll every %d ui_clk" % (
+            t["width"], "on" if t["ecc"] else "off", t["ca_drive"], t["input_clk_ps"], t["poll_cyc"]))
+        L.append("  part      : %s, %s%s" % (t["variant"], t["part"], ", " + t["part_note"] if t.get("part_note") else ""))
         if t.get("per_xclbin"):
-            L.append("  note      : route V -- the MIG is in each KEPT xclbin; these are the template's values")
+            L.append("  note      : route V -- each DDR xclbin carries its own controller; these are the template's "
+                     "values, the loaded xclbin's own are below")
     else:
-        L.append("MIG (table) : %s" % sp["table_source"])
-    if sp.get("ddr_info"):
-        L.append("DDR_INFO    : " + ", ".join("%s=%s" % kv for kv in sp["ddr_info"].items()))
+        L.append("configuration: %s" % sp["table_source"])
+    di = (rv or {}).get("ddr_info") or {}
+    if di.get("kept"):
+        L.append("loaded xclbin reports: DDR4-%d (tCK %d ps), CL%d CWL%d, %d-bit%s, CA %s, MIG %s, part %s" % (
+            di["mts"], di["tck_ps"], di["cl"], di["cwl"], di["dq_width"], " ECC" if di["ecc"] else "", di["ca_drive"],
+            di["mig_variant"], di["part_id"]))
+    if sp.get("ddr_info") and verbose:
+        L.append("DDR_INFO (raw): " + ", ".join("%s=%s" % kv for kv in sp["ddr_info"].items()))
     m = sp["measured"]
     if m.get("ui_clk_mhz"):
-        L.append("measured    : ui_clk %.3f MHz -> %.1f MT/s, +-%.2f%% (%d polls in %.3f s)%s" % (
-            m["ui_clk_mhz"], m["mts"], m["precision_pct"], m["polls"], m["window_s"],
-            "; %+.2f%% vs the table" % m["vs_table_pct"] if "vs_table_pct" in m else ""))
-        L.append("  how       : %s" % m["formula"])
+        L.append("measured    : %.1f MT/s (ui_clk %.3f MHz), +-%.2f%% (%d polls in %.3f s)%s" % (
+            m["mts"], m["ui_clk_mhz"], m["precision_pct"], m["polls"], m["window_s"],
+            "; %+.2f%% vs the build" % m["vs_table_pct"] if "vs_table_pct" in m else ""))
+        if verbose:
+            L.append("  how       : %s" % m["formula"])
         if m.get("note"):
             L.append("  note      : %s" % m["note"])
     else:
         L.append("measured    : not measured: %s" % m.get("reason"))
     e = d["ecc"]
-    L.append("ECC         : %d corrected, %d uncorrectable polls%s, ECC %s, %d polls (cumulative since configuration)" % (
-        e["ce"], e["ue_polls"], " (UE SEEN)" if e["ue_seen"] else "", "on" if e["ecc_on"] else "OFF", e["polls"]))
+    live = v in ("OK", "ERRORS", "BLOCKED")
+    L.append("ECC         : %s%d corrected, %d uncorrectable polls%s, ECC %s, %d polls (since configuration)" % (
+        "" if live else "not running now (no calibrated DDR controller); totals: ",
+        e["ce"], e["ue_polls"], " (UE SEEN)" if e["ue_seen"] else "",
+        ("on" if e["ecc_on"] else "OFF") if live else "flag %d" % e["ecc_on"], e["polls"]))
     for k in ("first_ce", "first_ue"):
         if e.get(k):
             L.append("  %-9s : %s" % (k.replace("_", " "), R.ffa_str(e[k])))
@@ -627,6 +697,8 @@ def render_ddr(d):
         el = d["ecc_this_load"]
         L.append("  this load : %d corrected, %d uncorrectable polls%s" % (el["ce"], el["ue_polls"],
                                                                          " (UE SEEN)" if el["ue_seen"] else ""))
+    if not verbose:
+        L.append("(-v: the raw DDR_INFO registers and how the speed is measured)")
     return "\n".join(L)
 
 
@@ -648,7 +720,11 @@ def cmd_ddr(host, args):
     if rv:
         d["calibration"]["calibrated"] = rv["calibrated"]
         d["ecc_this_load"] = rv["ecc_this_load"]
-    out(args, d, "card %d (%s, %s)\n" % (card["index"], sh.mgmt, sh.name) + render_ddr(d))
+        d["routev"] = {k: rv.get(k) for k in ("ddr_present", "calibrated", "rp_released", "xclbin_loaded", "boot_rm",
+                                             "ddr_info")}
+    v, why = ddr_verdict(d)
+    d["verdict"] = dict(state=v, why=why)
+    out(args, d, "card %d (%s, %s)\n" % (card["index"], sh.mgmt, sh.name) + render_ddr(d, verbose=args.verbose))
     return 0
 
 
@@ -1157,6 +1233,7 @@ def build_parser():
     q = add("ddr", cmd_ddr, "DDR configuration, measured speed and ECC totals")
     q.add_argument("--window", type=float, default=1.5, help="measurement window in seconds (default 1.5; the "
                                                               "precision is about 2/(1000 x window) + 0.08 %%)")
+    q.add_argument("-v", "--verbose", action="store_true", help="also the raw DDR_INFO registers and the measurement formula")
     add("memory", cmd_memory, "memory banks of the loaded xclbin (used / ready / PRUNED)")
     q = add("counters", cmd_counters, "every counter the running shell exposes")
     q.add_argument("--watch", type=float, metavar="N", help="re-read every N seconds and show deltas (Ctrl-C stops)")

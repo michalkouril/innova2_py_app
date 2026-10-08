@@ -682,14 +682,14 @@ def ddr_ready_for_rate(sh, regs=None):
     if R.is_routev(sh.lay):
         i = rd(0x1C0)
         if not (i & 1):
-            return False, "no DDR in the loaded xclbin (PRUNED)"
+            return False, "the loaded region has no DDR controller (PRUNED xclbin or boot placeholder)"
         if not (i >> 1 & 1 and i >> 4 & 1):
-            return False, "DDR KEPT but not calibrated / RP isolated"
+            return False, "the DDR controller is not calibrated (or the region is mid-load)"
         return True, ""
     if not rd(0x00) >> 28 & 1:
-        return False, "DDR gate closed (not calibrated or mode off)"
+        return False, "DDR access is blocked (the DDR gate is closed: not calibrated, or mode off)"
     if not rd(0x18) >> 29 & 1:
-        return False, "the ECC poller has never polled"
+        return False, "the ECC poller has never run (it measures the speed)"
     return True, ""
 
 

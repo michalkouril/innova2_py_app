@@ -1930,7 +1930,8 @@ class DdrSpeedTests(unittest.TestCase):
         self.assertEqual(d["speed"]["table"]["ca_drive"][:10], "RDRV_48_48")
         rc, o, e = run_cli(h, ["ddr"])
         for want in ("CL 19, CWL 18, tRCD 20, tRP 20, tRAS 43, tRFC 467", "InputClockPeriod 10000 ps", "PHY 4:1",
-                     "measured    : ui_clk 333.", "ECC         : 0 corrected"):
+                     "measured    : 2667.", "(ui_clk 333.", "ECC         : 0 corrected", "DDR         : OK\n  summary   : calibrated and reachable",
+                     "  access    : open", "  mode      : on -- real DDR"):
             self.assertIn(want, o)
         self.assertEqual(h.model.writes, [])
 
@@ -1962,7 +1963,7 @@ class DdrSpeedTests(unittest.TestCase):
         h = MockHost(0x0B5E0007)
         h.model.r[0x00] &= ~(1 << 28)
         rc, d = self.ddr(h)
-        self.assertIn("gate closed", d["speed"]["measured"]["reason"])
+        self.assertIn("DDR gate is closed", d["speed"]["measured"]["reason"])
 
     def test_routev(self):
         h = MockHost(RV)
@@ -1986,6 +1987,51 @@ class DdrSpeedTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("not available on this shell", o)
         self.assertEqual(h.model.reads, [])
+
+
+class DdrVerdictTests(unittest.TestCase):
+    """'ddr' leads with a plain verdict and explains each fact (owner, 2026-10-08: 'gate CLOSED' / 'xclbin DDR KEPT'
+    / 'mode on (requested on)' meant nothing on their own)."""
+
+    def ddr(self, h, *extra):
+        rc, o, e = run_cli(h, ["ddr"] + list(extra))
+        j = json.loads(run_cli(h, ["ddr", "--json"])[1])
+        return o, j
+
+    def test_refused_kept_load_is_not_usable(self):
+        h = RouteV2Tests().boot(pruned=False)      # hpz440 after validate: a KEPT RM whose MIG never calibrated
+        h.model.rv.update(kept=True, cal=False)
+        h.model.r[0x120] = 2                        # the RP was reconfigured: not the boot RM
+        o, j = self.ddr(h)
+        self.assertEqual(j["verdict"]["state"], "NOT USABLE")
+        self.assertIn("DDR         : NOT USABLE (did not calibrate)\n  why       : ", o)
+        self.assertIn("XRT refused that xclbin", o)
+        self.assertIn("  calibrated: NO", o)
+        self.assertIn("  access    : blocked -- the shell's DDR gate is closed", o)
+        self.assertIn("a DDR xclbin that XRT refused", o)
+        self.assertNotIn("gate CLOSED", o)
+
+    def test_pruned_has_no_ddr(self):
+        h = RouteV2Tests().boot()                   # the boot filler: no DDR controller at all
+        o, j = self.ddr(h)
+        self.assertEqual(j["verdict"]["state"], "NO DDR IN THIS XCLBIN")
+        self.assertIn("placeholder region has no DDR controller", o)
+        self.assertIn("nothing to calibrate", o)
+
+    def test_off_and_raw_registers_behind_verbose(self):
+        h = MockHost(RV2)
+        o, j = self.ddr(h)
+        self.assertNotIn("DDR_INFO (raw)", o)
+        self.assertIn("loaded xclbin reports: DDR4-", o)
+        self.assertIn("DDR_INFO (raw)", run_cli(h, ["ddr", "-v"])[1])
+        h.model.write(0x32008, 1)                   # mode off
+        self.assertEqual(self.ddr(h)[1]["verdict"]["state"], "DISABLED")
+
+    def test_ue_is_errors(self):
+        h = MockHost(0x0B5E0007)
+        h.model.r[0x18] = 3                          # 3 uncorrectable polls since configuration
+        o, j = self.ddr(h)
+        self.assertEqual(j["verdict"]["state"], "ERRORS")
 
 
 # ---- 1.3.5: the warm-reboot fenced write (ddr.fenced_linkdown_benign) and xbutil PASSED WITH WARNINGS
