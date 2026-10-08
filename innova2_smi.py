@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.9"
+VERSION = "1.3.10"
 
 
 def _version():
@@ -57,7 +57,7 @@ def confirm(args, prompt):
     if getattr(args, "yes", False):
         return True
     if not sys.stdin.isatty():
-        print("*** %s -- refusing without --yes (no terminal to ask)" % prompt, file=sys.stderr)
+        print(fit_text("*** %s -- refusing without --yes (no terminal to ask)" % prompt, out_width()), file=sys.stderr)
         return False
     sys.stdout.write("%s [y/N] " % prompt)
     sys.stdout.flush()
@@ -1213,7 +1213,7 @@ def main(argv=None, host=None):
     try:
         return args.fn(host, args)
     except H.Refused as e:
-        print("*** %s" % e, file=sys.stderr)
+        print(fit_text("*** %s" % e, out_width()), file=sys.stderr)
         return 1
     except H.UnsafeAccess as e:
         print("*** refused before touching the bus: %s" % e, file=sys.stderr)
