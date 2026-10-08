@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.11"
+VERSION = "1.3.12"
 
 
 def _version():
