@@ -79,7 +79,7 @@ def ca_of(name):
 def variant_of(name, tck):
     """The route-V MIG variant (build/mig_variant.tcl) with this tCK and part. RMs built from the dw8 custom-parts CSV
     are named *dw8* or carry a CA suffix (the 2026-10-08 convention); others use the MIG's built-in part."""
-    dw8 = "dw8" in name or re.search(r"_(ca60|ca48|ca40dflt)$", name)
+    dw8 = "dw8" in name or name.startswith("lib_") or re.search(r"_(ca60|ca48|ca40dflt)$", name)
     if tck == 750:
         return "e6b750" if dw8 else None
     if tck == 833:
@@ -339,3 +339,128 @@ def from_logs(d, only=None):
         if f.endswith(".log") and not f.startswith("campaign") and (not only or re.search(only, f[:-4])):
             out.append(parse_run_log(open(os.path.join(d, f), errors="replace").read(), f[:-4]))
     return out
+
+
+# ----------------------------------------------------------------------------------------------------- sequence
+# Owner 2026-10-08: "start with 72-bit ECC 750, then 833, then assess each lane individually at 750 and 833. Based on
+# which are working try doubles and finally 4." -- with the board's constraints: a lane in bank 68 (1, 2, 7, 8) cannot be
+# tested alone (the MIG needs consecutive banks and CA is in bank 66), so it is screened paired with a bank-67 lane the
+# screen already found clean; a screen only RULES OUT lanes (card A: all nine lanes clean alone, 0+6+7+8 failing together),
+# so every combination is judged as itself, with the full confirmation.
+SINGLE_OK = (0, 3, 4, 5, 6)
+BANK68 = (1, 2, 7, 8)
+ANCHORS = (6, 5, 4, 3)            # bank-67 anchors, in the order tried
+
+
+def lib_meta(name):
+    """lib_x<W>_<lanes>_<tCK>[_ecc]_<ca> (tester_pfm/rebuild/ddr_assess_lib/gen_lib.py) -> (width, lanes, tck, ecc)."""
+    m = re.fullmatch(r"lib_x(\d+)_(\d+)_(\d+)(_ecc)?_(ca60|ca48|ca40dflt)", name)
+    if not m:
+        return None
+    return int(m.group(1)), tuple(int(c) for c in m.group(2)), int(m.group(3)), bool(m.group(4))
+
+
+def lib_index(cands):
+    idx = {}
+    for c in cands:
+        m = lib_meta(c["name"])
+        if m:
+            idx[(m[1], m[2])] = dict(c, width=m[0], lanes_planned=list(m[1]), tck_planned=m[2])
+    return idx
+
+
+def lib_row(lanes, tck):
+    """The gen_lib.py / build_lib.sh row of an image this sequence needs but the library does not have."""
+    w = 8 * len(lanes)
+    ecc = w == 72
+    name = "lib_x%d_%s_%d%s_ca60" % (w, "".join(map(str, lanes)), tck, "_ecc" if ecc else "")
+    return "%s\t%d\t%s\t%d\t%s\t%d\t1\t%s" % (name, w, ",".join(map(str, lanes)), tck,
+                                             "NO_DM_NO_DBI" if ecc else "DM_DBI_RD", ecc, "10000" if tck == 750 else "-")
+
+
+def legal_sets(pool, k):
+    import itertools
+    return [c for c in itertools.combinations(sorted(pool), k)
+            if profile_problem(list(c), 833, "dw8_833") is None or k == 9]
+
+
+def sequence(t, lib, reps=2, reloads=2, state=None, log=print, max_needed=6):
+    """The owner's assessment sequence over a tester-image library. Returns dict(results, winner, standard, needed, steps).
+    state: {name: result} cache (screen results are upgraded to confirmed ones when a combination needs it)."""
+    state = state if state is not None else {}
+    steps, needed = [], []
+
+    def measure(key, confirm):
+        c = lib.get(key)
+        if c is None:
+            return None
+        r = state.get(c["name"])
+        if r is None or (confirm and not r.get("confirmed") and r.get("result") == "CLEAN"):
+            r = assess_one(t, c, reps=reps if confirm else 1, reloads=reloads if confirm else 0)
+            r["confirmed"] = confirm and r.get("result") == "CLEAN"
+            if r.get("width") and list(r.get("lanes", [])) != list(key[0]) and r["width"] != 72:
+                r = dict(r, result="MISLABELED", why="the image reports lanes %s, its name says %s" % (r["lanes"], list(key[0])))
+            state[c["name"]] = r
+            log("  %-30s %-10s %s" % (c["name"], r["result"], r.get("why", "")))
+        return r
+
+    def note(m):
+        steps.append(m); log(m)
+
+    # 1. 72-bit ECC, 2666 then 2400
+    note("step 1: 72-bit ECC (all nine lanes)")
+    for tck in (750, 833):
+        r = measure((tuple(range(9)), tck), True)
+        if r is None:
+            needed.append(lib_row(list(range(9)), tck)); continue
+        if r["result"] == "CLEAN":
+            note("  72-bit ECC is clean at tCK %d: the standard platform DDR works" % tck)
+            return dict(results=list(state.values()), winner=r, standard=True, needed=needed, steps=steps)
+    # 2./3. lane screen at 2400, then the survivors at 2666
+    good = {}
+    for tck in (833, 750):
+        pool = SINGLE_OK if tck == 833 else [l for l in SINGLE_OK if l in good[833]]
+        note("step %s: lane screen at tCK %d" % ("2" if tck == 833 else "3", tck))
+        g = set()
+        for l in pool:
+            r = measure(((l,), tck), False)
+            if r is None:
+                needed.append(lib_row([l], tck))
+            elif r["result"] == "CLEAN":
+                g.add(l)
+        for x in (BANK68 if tck == 833 else [l for l in BANK68 if l in good[833]]):
+            anchors = [a for a in ANCHORS if a in g]
+            if not anchors:
+                note("  lane %d: untested -- no clean bank-67 lane to pair it with at tCK %d" % (x, tck)); continue
+            for a in anchors[:2]:
+                r = measure((tuple(sorted((a, x))), tck), False)
+                if r is None:
+                    needed.append(lib_row(sorted((a, x)), tck)); continue
+                if r["result"] == "CLEAN":
+                    g.add(x); break
+        good[tck] = g
+        note("  clean at tCK %d: lanes %s" % (tck, sorted(g) or "none"))
+    # 4. build up: widest first, the faster speed first at each width; every combination judged as itself
+    note("step 4: combinations of the surviving lanes")
+    winner, ncombo = None, 0
+    for k in (8, 4, 2, 1):
+        for tck in (750, 833):
+            sets = legal_sets(good[tck], k)
+            for st in sets:
+                r = measure((st, tck), True)
+                if r is None:
+                    if ncombo < max_needed:              # the best-ranked missing combinations only
+                        needed.append(lib_row(list(st), tck)); ncombo += 1
+                    continue
+                if r["result"] == "CLEAN":
+                    winner = r
+                    break
+            if winner:
+                break
+        if winner:
+            break
+    if winner:
+        note("  widest clean combination: %s" % winner["name"])
+    else:
+        note("  no clean combination among the images present")
+    return dict(results=list(state.values()), winner=winner, standard=False, needed=needed, steps=steps)

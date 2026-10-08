@@ -42,7 +42,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.15"
+VERSION = "1.3.16"
 
 
 def _version():
@@ -1008,6 +1008,7 @@ def cmd_ddr_assess(host, args):
         results = A.from_logs(args.from_logs, args.only)
         if not results:
             raise H.Refused("no campaign logs (*.log) in %s" % args.from_logs)
+        s = A.settle(results)
     else:
         ts = [d for d in host.pci_devices() if d["vendor"] == A.TESTER_VENDOR and d["device"] == A.TESTER_DEVICE
               and (not args.bdf or d["bdf"].endswith(args.bdf))]
@@ -1026,14 +1027,37 @@ def cmd_ddr_assess(host, args):
                             % (len(cands) * (1 + args.reloads)))
         t = A.Tester(host, ts[0]["bdf"])
         dna = t.dna()
-        results = []
-        for i, c in enumerate(cands):
-            r = A.assess_one(t, c, reps=args.reps, reloads=args.reloads)
-            results.append(r)
-            if not args.json:
-                print(fit_text("[%d/%d] %-26s %-8s %s" % (i + 1, len(cands), c["name"], r["result"], r.get("why", "")),
-                               out_width()), flush=True)
-    s = A.settle(results)
+        lib = A.lib_index(cands)
+        if lib and not args.exhaustive:
+            # the staged sequence over the library: 72-bit ECC, lane screen, survivors at 2666, combinations
+            state = {}
+            if args.state and os.path.exists(args.state):
+                state = json.load(open(args.state))
+            say = (lambda m: None) if args.json else (lambda m: print(fit_text(m, out_width()), flush=True))
+            seq = A.sequence(t, lib, reps=args.reps, reloads=args.reloads, state=state, log=say)
+            if args.state:
+                with open(args.state, "w") as fh:
+                    json.dump(state, fh, indent=1)
+            results = seq["results"]
+            if seq["needed"]:
+                if args.needed:
+                    with open(args.needed, "w") as fh:
+                        fh.write("\n".join(seq["needed"]) + "\n")
+                if not args.json:
+                    print("images this sequence needs that the library lacks (%s):" % (
+                        "written to " + args.needed if args.needed else "build_lib.sh rows"))
+                    print("\n".join("  " + x for x in seq["needed"]))
+            s = dict(choice=seq["winner"], standard=seq["standard"],
+                     why=None if seq["winner"] else "no clean configuration among the images present")
+        else:
+            results = []
+            for i, c in enumerate(cands):
+                r = A.assess_one(t, c, reps=args.reps, reloads=args.reloads)
+                results.append(r)
+                if not args.json:
+                    print(fit_text("[%d/%d] %-26s %-8s %s" % (i + 1, len(cands), c["name"], r["result"], r.get("why", "")),
+                                   out_width()), flush=True)
+            s = A.settle(results)
     ch = s["choice"]
     name = args.name or (A.default_name(ch, args.card_name) if ch else None)
     prof = None
@@ -1488,6 +1512,10 @@ def build_parser():
     q.add_argument("--reps", type=int, default=2, help="self-checked full passes on the first load (default 2)")
     q.add_argument("--reloads", type=int, default=2, help="reloads of a clean candidate, one pass each (default 2)")
     q.add_argument("--from-logs", help="settle from tester campaign logs in this directory (no card access)")
+    q.add_argument("--exhaustive", action="store_true", help="assess every image in --partials (default with a "
+                   "lib_* library: the staged sequence, stopping as soon as each step decides)")
+    q.add_argument("--state", help="JSON cache of results; a later run (after building missing images) resumes")
+    q.add_argument("--needed", help="write the images the sequence needs but the library lacks (build_lib.sh rows)")
     q.add_argument("--name", help="profile name (default <card-name>_x<width>_<lanes>)")
     q.add_argument("--card-name", default="card", help="prefix of the default profile name")
     q.add_argument("--write", help="write the profile file here")

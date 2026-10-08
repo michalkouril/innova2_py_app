@@ -2613,7 +2613,8 @@ class DdrAssessLiveTests(unittest.TestCase):
                      "x64n1_833_ca60": dict(width=64, lmap=0x87654320, tck=833, mb=8192, cal=0x35, errors=7330),
                      "b72r_dw8_750_ecc_ca60": dict(width=72, lmap=0x76543210, tck=750, mb=8192, cal=0x34, errors=0)}
         for n in self.cfgs:      # a minimal .bit body: sync word + padding (the fake identifies the load by name)
-            open(os.path.join(self.d, "g2x2_rm_%s_partial.bit" % n), "wb").write(b"\xff" * 16 + b"\xaa\x99\x55\x66" + b"\x20\x00\x00\x00" * 8)
+            with open(os.path.join(self.d, "g2x2_rm_%s_partial.bit" % n), "wb") as fh:
+                fh.write(b"\xff" * 16 + b"\xaa\x99\x55\x66" + b"\x20\x00\x00\x00" * 8)
         self.fake = _FakeTester(self.cfgs)
         fake = self.fake
         orig = A.Tester.pr_load
@@ -2648,3 +2649,67 @@ class DdrAssessLiveTests(unittest.TestCase):
         self.assertIn("NO-CAL", o)
         self.assertIn("7330", o)
         self.assertEqual(self.fake.loaded, 1 + 1 + 3)               # 72 + 64 once each; the clean 32-bit 1 + 2 reloads
+
+
+class DdrAssessSequenceTests(DdrAssessLiveTests):
+    """The staged sequence on a simulated card like hpz440: lanes 5-8 clean at tCK 833 (each alone / anchored and all
+    four together), nothing clean at 750, 72-bit never calibrates; 3+4+5+6 fails together (a combination effect)."""
+    GOOD = {833: {5, 6, 7, 8}, 750: set()}
+
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        lib = [l.split("\t")[0] for l in open(os.path.join(os.path.dirname(__file__), "ddr_assess_library.tsv")) if l.strip()]
+        self.cfgs = {}
+        for n in lib:
+            self.add(n)
+        self.fake = _FakeTester(self.cfgs)
+        fake = self.fake
+        orig = A.Tester.pr_load
+
+        def pr_load(t, path):
+            fake.fed = [os.path.basename(path)[len("g2x2_rm_"):-len("_partial.bit")]]
+            return orig(t, path)
+        self.patch = (A.Tester, "pr_load", orig)
+        A.Tester.pr_load = pr_load
+
+    def add(self, n):
+        w, lanes, tck, ecc = A.lib_meta(n)
+        lmap = 0x76543210 if w == 72 else sum(l << (4 * k) for k, l in enumerate(lanes)) | (0xFFFFFFFF << (4 * len(lanes)) & 0xFFFFFFFF)
+        bad = not set(lanes) <= self.GOOD[tck] or set(lanes) == {3, 4, 5, 6}
+        self.cfgs[n] = dict(width=w, lmap=lmap, tck=tck, mb=min(w, 64) * 128, cal=0x34 if w == 72 else 0x35,
+                            errors=1000 if bad else 0)
+        with open(os.path.join(self.d, "g2x2_rm_%s_partial.bit" % n), "wb") as fh:
+            fh.write(b"\xff" * 16 + b"\xaa\x99\x55\x66" + b"\x20\x00\x00\x00" * 8)
+
+    def test_assess_and_settle_on_a_simulated_card(self):
+        st, need = os.path.join(self.d, "state.json"), os.path.join(self.d, "needed.tsv")
+        rc, o, e = run_cli(self.host(), ["ddr-assess", "--partials", self.d, "--yes", "--card-name", "hpz440",
+                                         "--state", st, "--needed", need])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("clean at tCK 833: lanes [5, 6, 7, 8]", o)
+        self.assertIn("lane 7: untested", o)                         # at 750 no bank-67 anchor survives
+        self.assertIn("settled: lib_x16_57_833_ca60 -- 16-bit on lanes 5,7", o)
+        rows = open(need).read()
+        self.assertIn("lib_x32_5678_833_ca60\t32\t5,6,7,8\t833\tDM_DBI_RD\t0\t1\t-", rows)
+        n1 = self.fake.loaded
+        self.assertLess(n1, 44)                                       # the sequence did not walk the whole library
+        self.add("lib_x32_5678_833_ca60")                            # round 2: the needed image was built
+        rc, o, e = run_cli(self.host(), ["ddr-assess", "--partials", self.d, "--yes", "--card-name", "hpz440",
+                                         "--state", st])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("settled: lib_x32_5678_833_ca60 -- 32-bit on lanes 5,6,7,8", o)
+        self.assertIn("lanes {5 6 7 8} variant dw8_833 ca RDRV_60_60}", o)
+        self.assertEqual(self.fake.loaded - n1, 3)                    # only the new image: 1 load + 2 reloads
+
+    def test_refuses_without_tester_or_yes(self):
+        pass
+
+    def test_a_healthy_card_stops_at_72_bit(self):
+        for n, c in self.cfgs.items():
+            if c["width"] == 72 and A.lib_meta(n)[2] == 750:
+                c.update(cal=0x35, errors=0)
+        rc, o, e = run_cli(self.host(), ["ddr-assess", "--partials", self.d, "--yes"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("standard platform DDR works", o)
+        self.assertEqual(self.fake.loaded, 3)                         # one image: load + 2 reloads
