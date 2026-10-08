@@ -26,8 +26,10 @@ is refused before anything but its OBS_ID is read (an undecoded management read 
 import argparse
 import json
 import os
+import shutil
 import signal
 import sys
+import textwrap
 import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -95,6 +97,36 @@ def fmt_bool(b, yes="yes", no="no"):
     return yes if b else no
 
 
+def out_width():
+    """Columns to fit human output into: the terminal's width on a tty, else 80 (pipes, files, tests)."""
+    if sys.stdout.isatty():
+        return max(60, shutil.get_terminal_size((80, 24)).columns)
+    return 80
+
+
+def wrap_fields(first, fields, width, indent=8):
+    """Join fields with two spaces (one after a field ending in ','), starting new lines at the indent instead of
+    letting the terminal fold a line; a field is never split."""
+    lines, cur = [], first
+    for f in fields:
+        if not f:
+            continue
+        sep = " " if cur.endswith(",") else "  "
+        if cur.strip() and len(cur) + len(sep) + len(f) > width:
+            lines.append(cur)
+            cur = " " * indent + f
+        else:
+            cur = cur + sep + f if cur.strip() else cur + f
+    lines.append(cur)
+    return "\n".join(lines)
+
+
+def wrap_text(text, width, indent=8, hang=2):
+    """A sentence (flag, note) wrapped at word boundaries; continuation lines hang under the first word."""
+    return textwrap.fill(text, width, initial_indent=" " * indent, subsequent_indent=" " * (indent + hang),
+                         break_long_words=False, break_on_hyphens=False)
+
+
 # ----------------------------------------------------------------------------------------------- list
 def cmd_list(host, args):
     """Every Innova-2 card: ConnectX-5, serial, FPGA functions, the FPGA's state and the shell identity."""
@@ -132,37 +164,44 @@ def cmd_list(host, args):
     if not rows:
         print("no Innova-2 card found")
         return 1
+    w = out_width()
     for r in rows:
         s = r["shell"]
         q = r["cx5_query"] or {}
         b = r["board"]
         if "error" in b:
-            bline = "board unknown (%s)" % b["error"]
+            board = ["board unknown (%s)" % b["error"]]
         elif b.get("vpd_empty"):
-            bline = "serial none, board none (VPD empty%s: not identifiable)" % (
-                "; PSID %s fw %s" % (b["psid"], b.get("fw_ver")) if b.get("psid") else "")
+            board = ["serial none, board none", "(VPD empty%s: not identifiable)" % (
+                "; PSID %s fw %s" % (b["psid"], b.get("fw_ver")) if b.get("psid") else "")]
         else:
-            bline = "serial %s  board %s rev %s%s" % (
-                r["serial"] or "(no SN in VPD)", r["part"] or "(no PN in VPD)", r["rev"] or "(no EC in VPD)",
-                "" if r["board_validated"] in (None, True) else " (NOT a validated board)")
-        print("card %d  ConnectX-5 %s  %s" % (r["index"], ",".join(r["cx5"]), bline))
-        print("        FPGA %s  state %s" % (
-            ", ".join("%s 10ee:%s [%s]" % (f["bdf"], f["device"][2:], f["driver"] or "no driver") for f in r["fpga_functions"])
-            or (("burn endpoint " + r["bope"]) if r["bope"] else "none"), r["state"]))
-        print("        ConnectX view: %s" % (("admin=%s oper=%s (%s) status=%s via %s" % (
+            board = ["serial %s  board %s rev %s" % (
+                r["serial"] or "(no SN in VPD)", r["part"] or "(no PN in VPD)", r["rev"] or "(no EC in VPD)"),
+                "" if r["board_validated"] in (None, True) else "(NOT a validated board)"]
+        print(wrap_fields("card %d" % r["index"], ["ConnectX-5 %s" % ",".join(r["cx5"])] + board, w))
+        fn = ["%s 10ee:%s [%s]" % (f["bdf"], f["device"][2:], f["driver"] or "no driver") for f in r["fpga_functions"]]
+        fn = [x + "," for x in fn[:-1]] + fn[-1:]
+        if fn:
+            fn[0] = "FPGA " + fn[0]
+        else:
+            fn = ["FPGA " + (("burn endpoint " + r["bope"]) if r["bope"] else "none")]
+        print(wrap_fields(" " * 8, fn + ["state %s" % r["state"]], w))
+        print(wrap_fields(" " * 8, ["ConnectX view: %s" % (("admin=%s oper=%s (%s) status=%s via %s" % (
             q["admin"], q["oper"], r["running_image"], q["status"], q.get("transport"))) if "oper" in q
-            else (q.get("error") or "not queried")))
+            else (q.get("error") or "not queried"))], w))
         if s.get("vbnv"):
-            print("        shell %s  ROM_TS %s (%s)  OBS_ID %s  build %s  Device Ready %s%s" % (
-                s["vbnv"], s["rom_ts"], s["rom_ts_hex"], s["obs_id"] or "-", s["build"] or "-", r["device_ready"] or "-",
-                ("  %s" % (r["rm"] if r["rm"] and r["rm"].startswith("no xclbin") else "xclbin DDR %s" % r["xclbin_ddr"]))
-                if r["xclbin_ddr"] else ""))
+            print(wrap_fields(" " * 8, [
+                "shell %s" % s["vbnv"], "build %s" % (s["build"] or "-"),
+                "ROM_TS %s (%s)" % (s["rom_ts"], s["rom_ts_hex"]), "OBS_ID %s" % (s["obs_id"] or "-"),
+                "Device Ready %s" % (r["device_ready"] or "-"),
+                (r["rm"] if r["rm"] and r["rm"].startswith("no xclbin") else "xclbin DDR %s" % r["xclbin_ddr"])
+                if r["xclbin_ddr"] else ""], w))
         if s.get("refused") and r["state"] not in ("FLEX", "FPGA_MISSING", "OTHER_XILINX"):
-            print("        not read further: %s" % s["refused"])
+            print(wrap_text("not read further: %s" % s["refused"], w))
         for sev, t in r["flags"]:
-            print("        %s %s" % (sev, t))
+            print(wrap_text("%s %s" % (sev, t), w))
         for n in r["cx5_health"]["notes"]:
-            print("        note: %s" % n)
+            print(wrap_text("note: %s" % n, w))
     return 0
 
 

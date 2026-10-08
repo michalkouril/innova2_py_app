@@ -1813,6 +1813,21 @@ class BoardIdTests(unittest.TestCase):
         rc, o, e = run_cli(h, ["list"])
         self.assertIn("serial MT1935X08327  board MNV303212A-ADLT rev A7", o)
 
+    def test_list_fits_80_columns(self):
+        """hpz440's worst case (empty VPD, route V r2 filler boot): every line fits an 80-column terminal, no field
+        is split across lines."""
+        h = RouteV2Tests().boot()
+        h.attrs_[("0000:09:00.0", "vpd")] = b"\x78"
+        h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/board_id"] = b"MT_0000000158"
+        h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/fw_ver"] = b"16.28.2006"
+        rc, o, e = run_cli(h, ["list"])
+        self.assertEqual(rc, 0, e)
+        self.assertEqual([x for x in o.splitlines() if len(x) > 80], [])
+        for f in ("(VPD empty; PSID MT_0000000158 fw 16.28.2006: not identifiable)", "no xclbin (boot RM: filler)",
+                  "ROM_TS 1792479600 (0x6ad71170)", "shell %s" % R.VBNV_ROUTEV):
+            self.assertIn(f, o)
+        self.assertTrue(o.startswith("card 0  ConnectX-5 "), o)
+
 
 # ----------------------------------------------------------------------------------------------- DDR speed / MIG table
 class DdrSpeedTests(unittest.TestCase):
