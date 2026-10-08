@@ -807,7 +807,10 @@ def run_check(host, card, interval=1.0, expect_mode="on", query_cx5=True, record
     card.setdefault("cx5_health", H.cx5_health(host, card))
     items = card_items(host, card)
     sh = H.Shell(host, card)
-    if card["state"] == "OUR_SHELL?":
+    # identify whenever the card holds one of our shells -- also when a caller (status) already identified it and the
+    # state no longer ends in '?': a fresh Shell is not identified, and an unidentified one made every rule after the
+    # identity block silently disappear (status's health line said OK where check said WARN; found 2026-10-08)
+    if card["state"].startswith("OUR_SHELL"):
         sh.identify()
         card["state"] = sh.state
     bi = H.board_id(host, card)

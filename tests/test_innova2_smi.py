@@ -640,7 +640,7 @@ class StatusTests(unittest.TestCase):
     def test_every_layout_status_and_counters(self):
         for oid in RTL_DECODE:
             h = MockHost(oid)
-            rc, o, e = run_cli(h, ["status"])
+            rc, o, e = run_cli(h, ["status", "-v"])
             self.assertEqual(rc, 0, "%x: %s" % (oid, e))
             self.assertIn("ECC", o)
             rc, o, e = run_cli(h, ["status", "--json"])
@@ -674,7 +674,7 @@ class StatusTests(unittest.TestCase):
         rc, o, e = run_cli(MockHost(0x0B5E0006), ["recorder", "--json"])
         self.assertEqual(rc, 0, e)
         self.assertEqual(json.loads(o)["records"][0]["type"], "START")
-        rc, o, e = run_cli(MockHost(0x0B5E0002), ["recorder"])
+        rc, o, e = run_cli(MockHost(0x0B5E0002), ["recorder", "-v"])
         self.assertEqual(rc, 1)
         self.assertIn("no throttle", e)
 
@@ -1261,7 +1261,7 @@ class UuidTests(unittest.TestCase):
             self.assertEqual(b[336:352].hex(), d["uuid"], f)
 
     def _st(self, h):
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertEqual(rc, 0, e)
         return o
 
@@ -1297,7 +1297,7 @@ class UuidTests(unittest.TestCase):
 
 class ThrottleWordingTests(unittest.TestCase):
     def st(self, h):
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertEqual(rc, 0, e)
         return o
 
@@ -1357,7 +1357,7 @@ class RouteVTests(unittest.TestCase):
 
     def test_status_kept_and_pruned(self):
         h = MockHost(RV)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertEqual(rc, 0, e)
         self.assertIn("xclbin KEPT (MIG in the dynamic region), calibrated, window gate open", o)
         self.assertIn("this load", o)
@@ -1370,7 +1370,7 @@ class RouteVTests(unittest.TestCase):
         st = json.loads(o)
         self.assertEqual(st["routev"]["xclbin_ddr"], "PRUNED")
         self.assertTrue(st["routev"]["rp_calib"])
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("PRUNED (no DDR in this xclbin)", o)
         self.assertIn("window fenced (expected: no DDR)", o)
         self.assertIn("no DDR in this xclbin (DDR_INFO magic 0x0D0D)", o)
@@ -1496,7 +1496,7 @@ class RouteV2Tests(unittest.TestCase):
         self.assertEqual(rc, 0, e)
         self.assertIn("no xclbin (boot RM: filler)", o)
         self.assertNotIn("xclbin DDR", o)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("DDR (route V)  : no xclbin (boot RM: filler, no DDR)", o)
         self.assertNotIn("xclbin KEPT", o)
         self.assertIn("no DDR in the loaded RM", o)
@@ -1511,13 +1511,13 @@ class RouteV2Tests(unittest.TestCase):
     def test_boot_kept_template_r1(self):
         h = self.boot(RV, pruned=False)
         self.assertIn("no xclbin (boot RM: KEPT template)", run_cli(h, ["list"])[1])
-        self.assertIn("no xclbin (boot RM: KEPT template, MIG in the dynamic region)", run_cli(h, ["status"])[1])
+        self.assertIn("no xclbin (boot RM: KEPT template, MIG in the dynamic region)", run_cli(h, ["status", "-v"])[1])
 
     def test_refused_kept_load_is_not_the_boot_rm(self):
         h = self.boot(pruned=False)                          # XRT refused a KEPT load (MIG timeout): uuid zero, PR done
         h.model.rv["cal"] = False
         h.model.r[0x120] = 4
-        o = run_cli(h, ["status"])[1]
+        o = run_cli(h, ["status", "-v"])[1]
         self.assertIn("no xclbin registered by XRT (RP holds the KEPT, MIG in the dynamic region RM of a refused load)", o)
         self.assertNotIn("no xclbin (boot RM", o)
         self.assertIsNone(json.loads(run_cli(h, ["status", "--json"])[1])["routev"]["boot_rm"])
@@ -1526,7 +1526,7 @@ class RouteV2Tests(unittest.TestCase):
         h = MockHost(RV2)
         self.assertIn("xclbin DDR KEPT", run_cli(h, ["list"])[1])
         h.model.set_pruned()
-        self.assertIn("xclbin PRUNED (no DDR in this xclbin)", run_cli(h, ["status"])[1])
+        self.assertIn("xclbin PRUNED (no DDR in this xclbin)", run_cli(h, ["status", "-v"])[1])
 
     def test_no_xocl_falls_back_to_pr_count(self):
         h = self.boot()
@@ -1541,7 +1541,7 @@ class RouteV2Tests(unittest.TestCase):
     def test_pr_count_is_isolations(self):
         h = MockHost(RV2)
         h.model.r[0x120] = 46
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("PR isolations  : 46 (~23 xclbin loads", o)
         self.assertEqual(json.loads(run_cli(h, ["status", "--json"])[1])["pr"]["xclbin_loads_estimate"], 23)
         self.assertIn("zero-length isolate", SMI.cmd_status.__doc__)
@@ -1679,7 +1679,7 @@ class MemoryTests(unittest.TestCase):
             self.assertTrue(x["used"] and x["ready"], (t, x["state"]))
             self.assertFalse(x["pruned"], t)
         self.assertEqual(b["bank0"]["state"], "in use, calibrated")
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("memory         : xclbin 97613339", o)
         self.assertIn("PLRAM2", o)
         rc, o, e = run_cli(h, ["status", "--json"])
@@ -1691,7 +1691,7 @@ class MemoryTests(unittest.TestCase):
     def test_memory_is_passive(self):
         h = MockHost(0x0B5E0007)
         load_xclbin(h, [1] * 6, [(0, 0, 0)])
-        run_cli(h, ["memory"])
+        run_cli(h, ["memory", "-v"])
         self.assertEqual(h.model.writes, [])
         self.assertFalse([c for c in h.runs if "examine" in c or any("xbutil" in x or "xrt-smi" in x for x in c)])
 
@@ -1706,7 +1706,7 @@ class MemoryTests(unittest.TestCase):
         self.assertIn("no marker", p2["evidence"])
         self.assertEqual(b["HOST"]["state"], "unused (may be pruned)")
         self.assertEqual(b["PLRAM0"]["state"], "in use, RP released")
-        rc, o, e = run_cli(h, ["memory"])
+        rc, o, e = run_cli(h, ["memory", "-v"])
         self.assertNotIn("PRUNED", o.replace("PRUNED is shown only where verifiable", ""))
         self.assertEqual(self.check(h)["severity"], "OK")
         h.attrs_[(USER, "icap.u.1/mem_topology")] = mem_topology([0, 1, 1, 1, 0, 0])
@@ -1745,7 +1745,7 @@ class MemoryTests(unittest.TestCase):
         r = self.check(h)
         self.assertEqual(r["severity"], "OK", [i for i in r["items"] if i["severity"] != "INFO"])
         self.assertNotIn("mem.ddr_kept_not_ready", self.rules(r))
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertRegex(o, r"bank0 +DDR +DDR4 .* no +PRUNED")
 
     def test_routev_kept(self):
@@ -1766,7 +1766,7 @@ class MemoryTests(unittest.TestCase):
         h = MockHost(0x0B5E0007)
         h.attrs_.update({(USER, "xclbinuuid"): "00000000-0000-0000-0000-000000000000",
                          (USER, "icap.u.1/mem_topology"): b""})
-        rc, o, e = run_cli(h, ["memory"])
+        rc, o, e = run_cli(h, ["memory", "-v"])
         self.assertEqual(rc, 0, e)
         self.assertIn("no xclbin loaded", o)
         r = self.check(h)
@@ -1809,7 +1809,7 @@ class BoardIdTests(unittest.TestCase):
         self.assertNotIn("?", o.splitlines()[0])
         self.assertIn("VPD empty; PSID MT_0000000158 fw 16.28.2006", o)
         self.assertNotIn("NOT a validated board", o)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("board          : VPD empty", o)
         r = C.run_check(h, H.discover(h)[0], interval=0)
         self.assertIn("identity.vpd_empty", [i["rule"] for i in r["items"] if i["severity"] == "WARN"])
@@ -1844,9 +1844,9 @@ class OutputWidthTests(unittest.TestCase):
 
     def test_status_fits_80_and_keeps_labels(self):
         h = RouteV2Tests().boot()
-        rc, o80, e = run_cli(h, ["status"], columns=80)
+        rc, o80, e = run_cli(h, ["status", "-v"], columns=80)
         self.assertEqual([x for x in o80.splitlines() if len(x) > 80], [])
-        rc, wide, e = run_cli(h, ["status"])          # counters move between runs: fold this one report below
+        rc, wide, e = run_cli(h, ["status", "-v"])          # counters move between runs: fold this one report below
         o = SMI.fit_text(wide, 80)
         self.assertEqual([x for x in o.splitlines() if len(x) > 80], [])
         labels = [x[:17] for x in wide.splitlines() if x[15:17] == ": "]
@@ -1880,12 +1880,12 @@ class OutputWidthTests(unittest.TestCase):
         h.model.records += [(17, 0, 1000 * k) for k in range(1, 15)]   # 15 records in the ring
         st = json.loads(run_cli(h, ["status", "--json"])[1])
         self.assertEqual(len(st["recorder"]["last"]), 10)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertIn("last 10; now = FPGA uptime", o)
         self.assertRegex(o, r"\d+\.\d{6} s +\S+( \S+)? ago  THR_TIER")
         j = json.loads(run_cli(h, ["recorder", "--json"])[1])
         self.assertTrue(all(0 <= r["ago_s"] <= j["now_s"] for r in j["records"]))
-        self.assertIn("now: FPGA uptime", run_cli(h, ["recorder"])[1])
+        self.assertIn("now: FPGA uptime", run_cli(h, ["recorder", "-v"])[1])
 
 
 # ----------------------------------------------------------------------------------------------- DDR speed / MIG table
@@ -1932,7 +1932,7 @@ class DdrSpeedTests(unittest.TestCase):
         self.assertLess(abs(m["vs_table_pct"]), m["precision_pct"])
         self.assertLess(m["precision_pct"], 0.3)
         self.assertEqual(d["speed"]["table"]["ca_drive"][:10], "RDRV_48_48")
-        rc, o, e = run_cli(h, ["ddr"])
+        rc, o, e = run_cli(h, ["ddr", "-v"])
         for want in ("CL 19, CWL 18, tRCD 20, tRP 20, tRAS 43, tRFC 467", "InputClockPeriod 10000 ps", "PHY 4:1",
                      "measured    : 2667.", "(ui_clk 333.", "ECC         : 0 corrected", "DDR         : OK\n  summary   : calibrated and reachable",
                      "  access    : open", "  mode      : on -- real DDR", "not read from the card"):
@@ -1941,7 +1941,7 @@ class DdrSpeedTests(unittest.TestCase):
 
     def test_status_line_and_check_clean(self):
         h = MockHost(0x0B5E0006)                                      # E7a3-2400 (dw8_833)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertRegex(o, r"DDR speed      : DDR4-2400 \(dw8_833: tCK 833 ps, CL19/CWL18\); measured ui_clk 300\.\d+ MHz = 240\d MT/s")
         r = C.run_check(h, H.discover(h)[0], interval=1.0)
         self.assertNotIn("ddr.rate_mismatch", self.rules(r))
@@ -1987,7 +1987,7 @@ class DdrSpeedTests(unittest.TestCase):
     def test_old_shell_not_available(self):
         h = MockHost(0x0B5E0007, extra_attrs={("0000:08:00.0", "rom.m.1/VBNV"): R.VBNV_OLD,
                                               ("0000:08:00.0", "mig_calibration"): "0"})
-        rc, o, e = run_cli(h, ["ddr"])
+        rc, o, e = run_cli(h, ["ddr", "-v"])
         self.assertEqual(rc, 1)
         self.assertIn("not available on this shell", o)
         self.assertEqual(h.model.reads, [])
@@ -1998,7 +1998,7 @@ class DdrVerdictTests(unittest.TestCase):
     / 'mode on (requested on)' meant nothing on their own)."""
 
     def ddr(self, h, *extra):
-        rc, o, e = run_cli(h, ["ddr"] + list(extra))
+        rc, o, e = run_cli(h, ["ddr", "-v"] + list(extra))
         j = json.loads(run_cli(h, ["ddr", "--json"])[1])
         return o, j
 
@@ -2024,11 +2024,13 @@ class DdrVerdictTests(unittest.TestCase):
 
     def test_off_and_raw_registers_behind_verbose(self):
         h = MockHost(RV2)
-        o, j = self.ddr(h)
-        self.assertNotIn("DDR_INFO (raw)", o)
+        summary = run_cli(h, ["ddr"])[1]                 # bare: one verdict line per card, no registers
+        self.assertIn("  DDR     : OK -- ", summary)
+        self.assertNotIn("DDR_INFO (raw)", summary)
+        o, j = self.ddr(h)                               # -v: the full page, raw registers included
         self.assertIn("loaded xclbin's controller (read from the card): DDR4-", o)
         self.assertIn("configuration: the shell's DDR template", o)
-        self.assertIn("DDR_INFO (raw)", run_cli(h, ["ddr", "-v"])[1])
+        self.assertIn("DDR_INFO (raw)", o)
         h.model.write(0x32008, 1)                   # mode off
         self.assertEqual(self.ddr(h)[1]["verdict"]["state"], "DISABLED")
 
@@ -2037,6 +2039,80 @@ class DdrVerdictTests(unittest.TestCase):
         h.model.r[0x18] = 3                          # 3 uncorrectable polls since configuration
         o, j = self.ddr(h)
         self.assertEqual(j["verdict"]["state"], "ERRORS")
+
+
+class AllCardsTests(unittest.TestCase):
+    """Owner convention (2026-10-08): read-only reports without parameters cover every card with a summary; -v gives
+    the details, -d narrows; actions still need -d when there are several cards. Two cards = the mock card twice."""
+
+    def setUp(self):
+        self.orig = H.discover
+        H.discover = lambda host: [self.orig(host)[0], dict(self.orig(host)[0], index=1)]
+
+    def tearDown(self):
+        H.discover = self.orig
+
+    def test_bare_reports_cover_every_card(self):
+        for cmd in ("status", "ddr", "memory", "counters", "recorder"):
+            h = MockHost(RC1)
+            rc, o, e = run_cli(h, [cmd])
+            self.assertNotIn("several", e + o, cmd)
+            self.assertIn("card 0  ", o, cmd)
+            self.assertIn("card 1  ", o, cmd)
+            self.assertIn("-d CARD: one card", o, cmd)
+
+    def test_d_narrows_and_json_shape(self):
+        h = MockHost(RC1)
+        o = run_cli(h, ["status", "-d", "1"])[1]
+        self.assertIn("card 1  ", o)
+        self.assertNotIn("card 0  ", o)
+        self.assertEqual(len(json.loads(run_cli(h, ["ddr", "--json"])[1])), 2)
+        self.assertIsInstance(json.loads(run_cli(h, ["ddr", "-d", "0", "--json"])[1]), dict)
+
+    def test_actions_still_need_d(self):
+        h = MockHost(RC1)
+        rc, o, e = run_cli(h, ["ddr-mode", "off", "--yes"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("2 Innova-2 cards found", e)
+        self.assertEqual(h.model.writes, [])
+
+
+class CheckAfterIdentifyTests(unittest.TestCase):
+    """Regression (2026-10-08): run_check on a card a caller had already identified skipped every rule."""
+
+    def test_rules_run_on_an_identified_card(self):
+        h = MockHost(RC1, slot_width="1")
+        c = H.discover(h)[0]
+        H.classify(h, c, query_cx5=False)
+        sh = SMI.card_shell(h, c)                              # what status does first
+        self.assertEqual(c["state"], "OUR_SHELL")
+        r = C.run_check(h, c, interval=0)
+        self.assertIn("pcie.slot_link", [i["rule"] for i in r["items"]])
+        self.assertEqual(r["severity"], "WARN")
+        o = run_cli(MockHost(RC1, slot_width="1"), ["status"])[1]
+        self.assertIn("  health  : WARN", o)
+        self.assertIn("pcie.slot_link", o)
+
+
+class SummaryTests(unittest.TestCase):
+    def test_single_card_status_summary_then_full(self):
+        h = MockHost(RC1)
+        o = run_cli(h, ["status"])[1]
+        self.assertLessEqual(len(o.splitlines()), 8, o)
+        for want in ("  health  : OK", "  DDR     : OK -- ", "  thermal : ", "  PCIe    : FPGA x8", "(-v: details)"):
+            self.assertIn(want, o)
+        self.assertGreater(len(run_cli(h, ["status", "-v"])[1].splitlines()), 20)
+
+    def test_counters_and_recorder_summaries(self):
+        h = MockHost(RC1)
+        o = run_cli(h, ["counters"])[1]
+        self.assertIn("  ECC       : CE 0, UE polls 0", o)
+        self.assertIn("counters in all", o)
+        h.model.records += [(17, 0, 1000 * k) for k in range(1, 15)]
+        j = json.loads(run_cli(h, ["recorder", "--json"])[1])
+        self.assertEqual(len(j["records"]), 5)
+        self.assertEqual(len(json.loads(run_cli(h, ["recorder", "-v", "--json"])[1])["records"]), 15)
+        self.assertEqual(len(json.loads(run_cli(h, ["recorder", "-n", "3", "--json"])[1])["records"]), 3)
 
 
 # ---- 1.3.5: the warm-reboot fenced write (ddr.fenced_linkdown_benign) and xbutil PASSED WITH WARNINGS
@@ -2186,7 +2262,7 @@ class Rc1Tests(unittest.TestCase):
     def test_status_shows_the_counters(self):
         h = MockHost(RC1)
         self.fences(h, 1, 1, 0)
-        rc, o, e = run_cli(h, ["status"])
+        rc, o, e = run_cli(h, ["status", "-v"])
         self.assertEqual(rc, 0, e)
         self.assertIn("fenced DDR accesses 1 (first: write at 0x200000000); 1 inside link-down windows, 0 outside", o)
         fw = json.loads(run_cli(h, ["status", "--json"])[1])["ddr"]["fence_windows"]

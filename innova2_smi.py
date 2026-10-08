@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.13"
+VERSION = "1.3.14"
 
 
 def _version():
@@ -223,6 +223,47 @@ def wrap_text(text, width, indent=8, hang=2):
     """A sentence (flag, note) wrapped at word boundaries; continuation lines hang under the first word."""
     return textwrap.fill(text, width, initial_indent=" " * indent, subsequent_indent=" " * (indent + hang),
                          break_long_words=False, break_on_hyphens=False)
+
+
+# ----------------------------------------------------------------------------------------------- read-only reports
+# Owner convention (2026-10-08): a read-only report without parameters covers EVERY card with a short summary;
+# -v gives the details, -d CARD narrows to one card. Actions (ddr-mode, clear, throttle, test, ...) still need -d
+# when several cards are present.
+def report_cards(host, args):
+    cs = cards(host, args)
+    if not cs:
+        raise H.Refused("no Innova-2 card found (no ConnectX-5 behind an Innova-2 switch)")
+    return [H.select_card(cs, args.device)] if args.device is not None else cs
+
+
+def card_shell(host, card):
+    sh = H.Shell(host, card)
+    if card["state"] == "OUR_SHELL?":
+        sh.identify()
+        card["state"] = sh.state
+    return sh
+
+
+def run_report(host, args, one):
+    """one(host, args, card, sh, detail) -> (json object, text, rc) for one card. Runs it on every selected card;
+    JSON: one object for one card, a list for several; text: the cards' reports one after another."""
+    sel = report_cards(host, args)
+    detail = bool(getattr(args, "verbose", False))
+    res = [one(host, args, c, card_shell(host, c), detail) for c in sel]
+    if getattr(args, "json", False):
+        print(H.jdump(res[0][0] if len(res) == 1 else [r[0] for r in res]))
+    else:
+        text = "\n\n".join(r[1] for r in res)
+        if len(sel) > 1 or not detail:
+            text += "\n(%s)" % ", ".join(x for x in ("-v: details" if not detail else "",
+                                                      "-d CARD: one card" if len(sel) > 1 else "") if x)
+        print(fit_text(text, out_width()))
+    return max(r[2] for r in res)
+
+
+def card_head(card, sh):
+    return "card %d  %s  FPGA %s  CX5 %s%s" % (card["index"], sh.name or card["state"], card.get("mgmt") or "-",
+                                              card["cx5"][0], ("  serial %s" % card["serial"]) if card.get("serial") else "")
 
 
 # ----------------------------------------------------------------------------------------------- list
@@ -536,10 +577,35 @@ image configured at power-on. Route V: until an xclbin is loaded the dynamic reg
 (r1: the KEPT template, r2: the PRUNED filler); list/status then say 'no xclbin (boot RM: ...)'."""
     if args.concerns:
         return cmd_check(host, args)
-    card, sh = open_card(host, args, need_shell=False)
+    return run_report(host, args, status_one)
+
+
+def status_one(host, args, card, sh, detail):
     st = collect_status(host, card, sh)
-    out(args, st, render_status(st))
-    return 0 if sh.ok else 1
+    if detail or not sh.ok:
+        return st, render_status(st), 0 if sh.ok else 1
+    r = C.run_check(host, card, interval=0 if getattr(args, "since_boot", False) else getattr(args, "interval", 1.0))
+    n = {k: sum(1 for i in r["items"] if i["severity"] == k) for k in ("FAIL", "WARN")}
+    L = [card_head(card, sh)]
+    L.append("  health  : %s%s" % (r["severity"], "" if r["severity"] == "OK" else " -- " + ", ".join(
+        "%d %s" % (n[k], k) for k in ("FAIL", "WARN") if n[k]) + ": " + ", ".join(
+        i["rule"] for i in r["items"] if i["severity"] in ("FAIL", "WARN"))))
+    d = dict(available=True, rom_ts=sh.rom_ts, calibration=H.ddr_state(sh), speed=dict(measured={}), ecc=st["ddr"]["ecc"])
+    rv = H.routev(sh)
+    if rv:
+        d["routev"] = {k: rv.get(k) for k in ("ddr_present", "calibrated", "rp_released", "xclbin_loaded", "boot_rm")}
+    sp = st.get("ddr_speed") or {}
+    if (sp.get("measured") or {}).get("mts"):
+        d["speed"]["measured"] = sp["measured"]
+    v, why = ddr_verdict(d)
+    L.append("  DDR     : %s -- %s" % (v, why))
+    t = st["temperature"].get("throttle") or st["temperature"].get("sysmon") or {}
+    L.append("  thermal : %s%s" % ("%.1f C" % t["temp_c"] if t.get("temp_c") is not None else "n/a",
+                                   ("; " + thr_effect(st["throttle"])) if "throttle" in st else ""))
+    p = st["pcie"]
+    L.append("  PCIe    : FPGA x%s, slot x%s; uptime %s" % (p["fpga_link"]["width"], p["card_slot_link"]["width"],
+                                                          fmt_dur(st["uptime"]["seconds"])))
+    return st, "\n".join(L), 0
 
 
 # ----------------------------------------------------------------------------------------------- memory
@@ -555,7 +621,8 @@ def render_memory(m, prefix="memory: ", detail=False):
     if not m.get("available"):
         return [prefix + "not available: %s" % m.get("reason")]
     if not m.get("xclbin_loaded"):
-        return [prefix + "no xclbin loaded (%s)" % m.get("reason")]
+        why = m.get("reason")
+        return [prefix + "no xclbin loaded" + ("" if not why or why == "no xclbin loaded" else " (%s)" % why)]
     L = [prefix + "xclbin %s, %d banks (xocl sysfs mem_topology; PRUNED is shown only where verifiable)" % (
         m["xclbin_uuid"], len(m["banks"]))]
     L.append("  %-3s %-8s %-6s %-5s %-14s %-8s %-4s %s" % ("idx", "tag", "kind", "type", "base", "size", "used", "state"))
@@ -578,11 +645,21 @@ def cmd_memory(host, args):
     shell's own registers; no XRT context, no xrt-smi. PRUNED is reported only where it is verifiable (route V's
     DDR, from RV_INFO); an unused PLRAM / HOST / PEER bank is 'unused (may be pruned)': the prune hooks put no marker
     in the xclbin (docs/innova2_smi_prune_marker.md proposes one)."""
-    card, sh = open_card(host, args, need_shell=False)
+    return run_report(host, args, memory_one)
+
+
+def memory_one(host, args, card, sh, detail):
     m = H.xrt_memory(host, card, sh)
-    out(args, m, "card %d (%s, %s)\n" % (card["index"], card.get("user") or "-", sh.name or card["state"]) +
-        "\n".join(render_memory(m, prefix="memory: ", detail=True)))
-    return 0 if m.get("available") else 1
+    rc = 0 if m.get("available") else 1
+    if detail:
+        return m, "card %d (%s, %s)\n" % (card["index"], card.get("user") or "-", sh.name or card["state"]) + \
+            "\n".join(render_memory(m, prefix="memory: ", detail=True)), rc
+    if not m.get("available") or not m.get("xclbin_loaded"):
+        return m, "%s\n%s" % (card_head(card, sh), "\n".join(render_memory(m, prefix="  memory  : "))), rc
+    banks = ["%s %s" % (b["tag"], b["state"]) for b in m["banks"] if b["used"]]
+    unused = [b["tag"] for b in m["banks"] if not b["used"]]
+    return m, "%s\n  xclbin  : %s\n  used    : %s\n  unused  : %s" % (
+        card_head(card, sh), m["xclbin_uuid"], ", ".join(banks) or "none", ", ".join(unused) or "none"), rc
 
 
 # ----------------------------------------------------------------------------------------------- ddr
@@ -732,15 +809,17 @@ def cmd_ddr(host, args):
     """DDR configuration and speed: calibration, mode, the build's MIG parameters (a per-build table: no shell reports
     its MIG configuration), the MIG ui_clk MEASURED passively from the ECC poller's poll count against the 250 MHz
     uptime counter (MT/s = 8 x ui_clk), and the ECC totals. Loads only; no XRT context."""
-    card, sh = open_card(host, args, need_shell=False)
+    return run_report(host, args, ddr_one)
+
+
+def ddr_one(host, args, card, sh, detail):
     if not sh.ok:
         mc = host.attr(card["mgmt"], "mig_calibration") if card.get("mgmt") else None
         d = dict(available=False, reason=sh.reason or card["state"], xrt_mig_calibration=mc,
                  table=R.mig_config(sh.rom_ts) if sh.rom_ts else None,
                  table_source="build table (ROM_TS %d)" % sh.rom_ts if R.mig_config(sh.rom_ts) else
                  "unknown build (ROM_TS %s)" % sh.rom_ts)
-        out(args, d, render_ddr(d))
-        return 1
+        return d, "card %d (%s)\n" % (card["index"], card["state"]) + render_ddr(d), 1
     d = dict(available=True, rom_ts=sh.rom_ts, calibration=H.ddr_state(sh), speed=H.ddr_speed(sh, window=args.window),
              ecc=H.ecc(sh))
     rv = H.routev(sh)
@@ -751,8 +830,9 @@ def cmd_ddr(host, args):
                                              "ddr_info")}
     v, why = ddr_verdict(d)
     d["verdict"] = dict(state=v, why=why)
-    out(args, d, "card %d (%s, %s)\n" % (card["index"], sh.mgmt, sh.name) + render_ddr(d, verbose=args.verbose))
-    return 0
+    if not detail:
+        return d, "%s\n  DDR     : %s -- %s" % (card_head(card, sh), v, why), 0
+    return d, "card %d (%s, %s)\n" % (card["index"], sh.mgmt, sh.name) + render_ddr(d, verbose=True), 0
 
 
 # ----------------------------------------------------------------------------------------------- check
@@ -848,11 +928,10 @@ def render_counters(cs, deltas=None):
 def cmd_counters(host, args):
     """Every counter the running shell exposes, from its OBS_ID register map (plus SYSMON, XRT clocks, cmc sensors,
     PEER/alias counters, AER). --watch N re-reads every N seconds and shows deltas."""
+    if not args.watch:
+        return run_report(host, args, counters_one)
     card, sh = open_card(host, args)
     prev = H.counters(sh)
-    if not args.watch:
-        out(args, prev, render_counters(prev))
-        return 0
     try:
         if args.json:
             print(json.dumps(dict(t=time.time(), counters=prev), default=str), flush=True)
@@ -874,23 +953,55 @@ def cmd_counters(host, args):
         return 0
 
 
+COUNTER_SUMMARY = (("ECC", ("ecc_ce", "ecc_ue_polls"), "CE %s, UE polls %s"),
+                   ("link-down", ("link_down_events", "fenced_accesses"), "%s; fenced DDR accesses %s"),
+                   ("PCIe", ("pcie_correctable", "pcie_nonfatal", "pcie_fatal"), "%s correctable, %s non-fatal, %s fatal"),
+                   ("PR", ("pr_count",), "%s isolations"),
+                   ("throttle", ("throttle_starts",), "%s starts"))
+
+
+def counters_one(host, args, card, sh, detail):
+    if not sh.ok:
+        raise H.Refused("card %d (%s): %s" % (card["index"], card["cx5"][0], sh.reason or card["state"]))
+    cs = H.counters(sh)
+    if detail:
+        return cs, "%s\n%s" % (card_head(card, sh), render_counters(cs)), 0
+    by = {e["name"]: e.get("value") for e in cs}
+    L = [card_head(card, sh)]
+    for label, names, fmt in COUNTER_SUMMARY:
+        if all(n in by for n in names):
+            L.append("  %-9s : %s" % (label, fmt % tuple(by[n] for n in names)))
+    locks = [(e["name"][len("lock_losses_"):], e.get("value")) for e in cs if e["name"].startswith("lock_losses_")]
+    if locks:
+        L.append("  %-9s : %s" % ("lock loss", ", ".join("%s %s" % kv for kv in locks)))
+    L.append("  (%d counters in all)" % len(cs))
+    return cs, "\n".join(L), 0
+
+
 # ----------------------------------------------------------------------------------------------- recorder
 def cmd_recorder(host, args):
     """Decode the flight recorder (E7a2+): the last N records (all by default). Uses the recorder's read-port index
     register (FR_IDX), which selects a record and changes nothing else."""
-    card, sh = open_card(host, args)
-    inf, recs = H.recorder(sh, last=args.n)
+    return run_report(host, args, recorder_one)
+
+
+def recorder_one(host, args, card, sh, detail):
+    if not sh.ok:
+        raise H.Refused("card %d (%s): %s" % (card["index"], card["cx5"][0], sh.reason or card["state"]))
+    n = args.n if args.n is not None else (None if detail else 5)
+    inf, recs = H.recorder(sh, last=n)
     now = H.uptime(sh)["seconds"]
     for r in recs:
         r["ago_s"] = round(now - r["time_s"], 6)
-    text = ["flight recorder: %d entries, %d written, wrapped %d x" % (inf["entries"], inf["written"], inf["wraps"]),
+    text = [card_head(card, sh),
+            "flight recorder: %d entries, %d written, wrapped %d x%s" % (
+                inf["entries"], inf["written"], inf["wraps"], "" if n is None else "; the last %d" % len(recs)),
             "now: FPGA uptime %.6f s (%s since configuration), read at %s" % (
                 now, fmt_dur(now), time.strftime("%Y-%m-%d %H:%M:%S")),
             "%-6s %13s %14s  %-12s %s" % ("index", "time (s)", "ago", "event", "detail")]
     text += ["%-6d %13.6f %10s ago  %-12s %s" % (r["index"], r["time_s"], fmt_dur(now - r["time_s"]), r["type"], r["detail"])
              for r in recs]
-    out(args, dict(info=inf, now_s=now, records=recs), "\n".join(text))
-    return 0
+    return dict(info=inf, now_s=now, records=recs), "\n".join(text), 0
 
 
 # ----------------------------------------------------------------------------------------------- controls
@@ -1235,13 +1346,13 @@ def build_parser():
     q = add("list", cmd_list, "every Innova-2 card and its FPGA state")
     q.add_argument("--load-module", action="store_true", help="modprobe mlx5_fpga_tools / innova2_areg when the "
                                                               "ConnectX node is missing (needs --yes)")
-    q = add("status", cmd_status, "one-screen health of a card")
+    q = add("status", cmd_status, "health summary of every card (-v: the full page)")
     q.add_argument("--concerns", action="store_true", help="alias of 'check'")
     q.add_argument("--all", action="store_true", help=argparse.SUPPRESS)
     q.add_argument("--interval", type=float, default=1.0, help=argparse.SUPPRESS)
     q.add_argument("--since-boot", action="store_true", help=argparse.SUPPRESS)
     q.add_argument("--expect-mode", default="on", help=argparse.SUPPRESS)
-    q.add_argument("-v", "--verbose", action="store_true", help=argparse.SUPPRESS)
+    q.add_argument("-v", "--verbose", action="store_true", help="the full status page (default: a summary per card)")
     q = add("check", cmd_check, "passive concerns-only check; exit 0 OK, 1 WARN, 2 FAIL",
             epilog="Strictly passive: register LOADS through the shell's map, sysfs, the xrt-smi device table. No "
                    "store (not even the recorder index), no xclbin, no DMA, no XRT context -- unless --recorder. "
@@ -1267,12 +1378,15 @@ def build_parser():
     q.add_argument("--window", type=float, default=1.5, help="measurement window in seconds (default 1.5; the "
                                                               "precision is about 2/(1000 x window) + 0.08 %%)")
     q.add_argument("-v", "--verbose", action="store_true", help="also the raw DDR_INFO registers and the measurement formula")
-    add("memory", cmd_memory, "memory banks of the loaded xclbin (used / ready / PRUNED)")
+    q = add("memory", cmd_memory, "memory banks of the loaded xclbin (used / ready / PRUNED)")
+    q.add_argument("-v", "--verbose", action="store_true", help="the full bank table with evidence")
     q = add("counters", cmd_counters, "every counter the running shell exposes")
     q.add_argument("--watch", type=float, metavar="N", help="re-read every N seconds and show deltas (Ctrl-C stops)")
     q.add_argument("--all-rows", action="store_true", help="with --watch: print every row, not only changed ones")
+    q.add_argument("-v", "--verbose", action="store_true", help="every counter (default: the key counters per card)")
     q = add("recorder", cmd_recorder, "decode the flight recorder (E7a2+)")
-    q.add_argument("-n", type=int, default=None, help="only the last N records")
+    q.add_argument("-n", type=int, default=None, help="the last N records (default 5 per card; -v: all)")
+    q.add_argument("-v", "--verbose", action="store_true", help="every record")
     add("clear", cmd_clear, "zero the observability counters (confirmation)")
     q = add("ddr-mode", cmd_ddr_mode, "show or set the DDR mode (confirmation)")
     q.add_argument("mode", nargs="?", choices=list(R.MODES), help="on | off | emu | hybrid")

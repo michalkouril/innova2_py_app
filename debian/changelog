@@ -1,3 +1,20 @@
+innova2-app (1.3.14) unstable; urgency=medium
+
+  * Read-only reports cover every card by default (owner convention):
+    status, ddr, memory, counters and recorder print a short summary per card
+    without parameters; -v gives the full output; -d CARD narrows to one card.
+    They no longer refuse with "several cards found". Actions (ddr-mode, clear,
+    throttle, test) still need -d on a multi-card host. --json: one object
+    for one card, a list for several.
+  * status summary: health (the same verdict and rules as 'check'), DDR
+    verdict, temperature and throttle state, PCIe widths, uptime.
+  * check: rules were skipped (false OK) when the card had already been
+    identified by the caller; run_check now always identifies our shells.
+    No released command was affected (only the new status summary).
+  * memory: 'no xclbin loaded' without the repeated reason.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Thu, 08 Oct 2026 11:00:00 -0400
+
 innova2-app (1.3.13) unstable; urgency=medium
 
   * recorder / status: the flight recorder shows 'now' (the FPGA uptime the
