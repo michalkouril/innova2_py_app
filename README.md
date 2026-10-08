@@ -149,6 +149,11 @@ Either way, then select the User image and **cold** cycle the host. The FPGA rea
 E7a3-2666ca48). It finds every card from its ConnectX-5, works out what the FPGA is running, and reads the shell's
 health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, XRT's sysfs). Run it as root.
 
+**Output convention (owner, 2026-10-08; being rolled out command by command -- not every command follows it yet):**
+every command run **without parameters prints a short summary for every card** in the host. Details come with
+`-v`; `-d CARD` narrows to one card, and is needed only for details or actions when more than one card is present.
+A command never refuses with "several cards found" just because `-d` is missing from a read-only query.
+
 | command | what |
 |---|---|
 | `innova2-smi list` | every card: ConnectX-5 BDFs and serial, FPGA functions, FPGA state, the image the ConnectX reports, shell (VBNV, ROM_TS, OBS_ID, build), XRT Device Ready |
