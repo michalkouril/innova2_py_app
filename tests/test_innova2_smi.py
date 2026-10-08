@@ -85,7 +85,8 @@ class Model:
         self.e7a3 = obs_id in (0x0B5E0006, 0x0B5E0007, RV, RV2, RV3, RC1)
         self.routev = obs_id in (RV, RV2, RV3)
         # route V model: the loaded xclbin is KEPT (MIG, poller) or PRUNED (filler); calibrated only when KEPT
-        self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0)
+        self.rv = dict(kept=True, cal=True, released=True, fence_kept=0, lost=0, loads_kept=1, loads_pruned=0,
+                       tck=750, w2=0x3348)          # the KEPT xclbin's DDR_INFO: tCK, width/ECC/CA/variant word
         self.code = c2(temp_c)
         self.r = {o: 0 for o in RTL_DECODE.get(obs_id, [0x30])}
         self.r[0x30] = obs_id
@@ -172,6 +173,10 @@ class Model:
 
     def poll_hz(self):
         cfg = R.mig_config(ROM_TS.get(self.obs))
+        if self.obs in (0x0B5E0008, 0x0B5E000B, 0x0B5E000D) and self.rv["kept"]:
+            # route V: the poller is the LOADED xclbin's, running at its MIG's ui_clk with its variant's POLL_CYC
+            ui = self.ui_mhz if self.ui_mhz is not None else 1e6 / (4 * self.rv["tck"])
+            return ui * 1e6 / R.VARIANT_POLL_CYC[R.MIG_VARIANTS[self.rv["w2"] >> 12 & 0xF]]
         ui = self.ui_mhz if self.ui_mhz is not None else (cfg["ui_clk_mhz"] if cfg else 333.0)
         return ui * 1e6 / (cfg["poll_cyc"] if cfg else 333000)
 
@@ -207,11 +212,11 @@ class Model:
         if o == 0x1EC:
             return rv["fence_kept"]
         if o == 0x200:
-            return (0xD4D4 << 16 | 750) if rv["kept"] else 0x0D0D0000
+            return (0xD4D4 << 16 | rv["tck"]) if rv["kept"] else 0x0D0D0000
         if o == 0x204:
             return 0x14141213 if rv["kept"] else 0
         if o == 0x208:
-            return 0x3348 if rv["kept"] else 0
+            return rv["w2"] if rv["kept"] else 0
         if o == 0x210:
             return 10923 if rv["kept"] else 0         # 333.3 MHz / 128 over 2^20 aclk (4.19 ms)
         if o == 0x214:
@@ -1958,6 +1963,23 @@ class DdrSpeedTests(unittest.TestCase):
         self.assertNotIn("ddr.rate_mismatch", self.rules(C.run_check(h, H.discover(h)[0], interval=1.0)))
         self.assertEqual(C.run_check(h, H.discover(h)[0], interval=0)["severity"], "OK")   # one snapshot: no rate
 
+    def test_routev_loaded_variant_sets_the_speed(self):
+        """2026-10-08, hpz440: a dw8_833 (DDR4-2400, POLL_CYC 300000) profile xclbin on route V r3, whose template is
+        e6b750 (2666, 333000), was measured with the template's POLL_CYC and shown as 2666 MT/s."""
+        h = MockHost(RV)
+        h.model.rv.update(tck=833, w2=0x2000 | 2 << 9 | 32)          # dw8_833, CA 60, 32-bit, ECC off
+        rc, d = self.ddr(h)
+        self.assertAlmostEqual(d["speed"]["measured"]["mts"], 2400.0, delta=12)
+        self.assertEqual(d["speed"]["loaded"]["poll_cyc"], 300000)
+        self.assertAlmostEqual(d["speed"]["measured"]["vs_table_pct"], 0.0, delta=0.5)
+        o = run_cli(h, ["ddr", "-v"])[1]
+        self.assertIn("this load : DDR4-2401", o)
+        self.assertIn("32-bit, ECC off, CA RDRV_60_60, MIG dw8_833", o)
+        self.assertIn("vs the loaded xclbin's controller", o)
+        self.assertIn("measured 2400 MT/s", run_cli(h, ["ddr"])[1].replace("2399", "2400").replace("2401", "2400"))
+        h.model.ui_mhz = 270.0                                        # the loaded MIG running 10 % slow: now a finding
+        self.assertIn("ddr.rate_mismatch", self.rules(C.run_check(h, H.discover(h)[0], interval=1.0)))
+
     def test_unknown_build_and_not_calibrated(self):
         h = MockHost(0x0B5E0004)                                      # ROM_TS not in the table
         rc, d = self.ddr(h)
@@ -1972,8 +1994,9 @@ class DdrSpeedTests(unittest.TestCase):
     def test_routev(self):
         h = MockHost(RV)
         rc, d = self.ddr(h)
-        self.assertIn("template", d["speed"]["measured"]["note"])
-        self.assertIn("ddr.rate_unverified", self.rules(C.run_check(h, H.discover(h)[0]), "INFO"))
+        self.assertIn("loaded xclbin's MIG variant", d["speed"]["measured"]["note"])
+        self.assertNotIn("ddr.rate_unverified", self.rules(C.run_check(h, H.discover(h)[0]), "INFO"))
+        self.assertNotIn("ddr.rate_mismatch", self.rules(C.run_check(h, H.discover(h)[0])))
         h.model.set_pruned()
         rc, d = self.ddr(h)
         self.assertIn("PRUNED", d["speed"]["measured"]["reason"])
@@ -2444,3 +2467,184 @@ class ValidateWarningsTests(unittest.TestCase):
         self.assertEqual((st, summ.split(";")[0]), ("PASS", "1 passed (pcie-link), 0 skipped"))
         failed = XBUTIL_PCIE_WARN.replace("[PASSED]", "[FAILED]")
         self.assertEqual(T.validate_verdict(T.parse_validate(failed), dict(ue=0))[0], "FAIL")
+
+
+# ---- ddr-assess (2026-10-08): settle a per-card DDR profile from tester measurements ----
+import innova2_smi_ddrassess as A    # noqa: E402
+
+_LOG_CLEAN = """== 12:01:02 s32_5678_833_ca60 0d0d  partials/g2x2_rm_s32_5678_833_ca60_partial.bit
+identity: WIDTH=0x20 LANEMAP=FFFF8765 TCK_PS=0x341 MEM_MB=4096 CAL_DONE=0x35
+  rep 0              PASS    errors=0          -                      st=0x00050F02    8.16 s (   502 MB/s)
+  1MB[0]             PASS    errors=0          -  [SELFSKIP]          st=0x01050F02    0.00 s (   237 MB/s)
+  4096MB[0]          PASS    errors=0          -  [SELFSKIP]          st=0x01050F02    8.15 s (   502 MB/s)
+"""
+_LOG_FAIL = """identity: WIDTH=0x40 LANEMAP=87654320 TCK_PS=0x341 MEM_MB=8192 CAL_DONE=0x35
+  rep 0              FAIL    errors=7330       first=0x40  [SELFSKIP]  st=0x01050F06    8.15 s (  1006 MB/s)
+  4MB[0]             FAIL    errors=120        first=0x30  [SELFSKIP]  st=0x01050F16    0.01 s (   634 MB/s)
+"""
+_LOG_NOCAL = """identity: WIDTH=0x48 LANEMAP=76543210 TCK_PS=0x2EE MEM_MB=8192 CAL_DONE=0x34
+  rep 0              INVALID errors=0          -  [NO_CAL]            st=0x00000026    4.00 s (  2048 MB/s)
+"""
+
+
+def _res(name, w, lanes, tck, result="CLEAN", ca="RDRV_60_60", variant="dw8_833"):
+    return dict(name=name, width=w, lanes=lanes, tck_ps=tck, mem_mb=w * 128, result=result, ca=ca, variant=variant,
+                why="x")
+
+
+class DdrAssessSettleTests(unittest.TestCase):
+    def test_log_parser_keeps_the_verdicts(self):
+        c = A.parse_run_log(_LOG_CLEAN, "s32_5678_833_ca60")
+        self.assertEqual((c["result"], c["lanes"], c["tck_ps"], c["ca"], c["variant"]),
+                         ("CLEAN", [5, 6, 7, 8], 833, "RDRV_60_60", "dw8_833"))
+        self.assertFalse(c["reloads_confirmed"])
+        f = A.parse_run_log(_LOG_FAIL, "x64n1_833_ca60")
+        self.assertEqual(f["result"], "FAIL")
+        self.assertIn("7330 errors", f["why"])
+        n = A.parse_run_log(_LOG_NOCAL, "b72r_dw8_750_ecc_ca60")
+        self.assertEqual((n["result"], n["lanes"]), ("NO-CAL", list(range(9))))       # 72-bit: lane 8 implicit
+
+    def test_settle_widest_then_fastest_then_ca(self):
+        r = [_res("d16", 16, [6, 8], 833), _res("s32_833_ca48", 32, [5, 6, 7, 8], 833, ca="RDRV_48_48"),
+             _res("s32_833_ca60", 32, [5, 6, 7, 8], 833), _res("s32_750", 32, [5, 6, 7, 8], 750, "FAIL", variant="e6b750"),
+             _res("x64", 64, [0, 2, 3, 4, 5, 6, 7, 8], 833, "FAIL")]
+        s = A.settle(r)
+        self.assertEqual(s["choice"]["name"], "s32_833_ca60")
+        r.append(_res("s32_750_ok", 32, [5, 6, 7, 8], 750, variant="e6b750"))
+        self.assertEqual(A.settle(r)["choice"]["name"], "s32_750_ok")                  # faster wins at equal width
+
+    def test_settle_skips_unusable_and_reports_72(self):
+        s = A.settle([_res("x64_1071", 64, [0, 2, 3, 4, 5, 6, 7, 8], 1071, variant=None), _res("d16", 16, [6, 8], 833)])
+        self.assertEqual(s["choice"]["name"], "d16")                                    # 1071 ps: no route-V variant
+        self.assertIn("banks", A.profile_problem([0, 7], 833, "dw8_833"))
+        s72 = A.settle([_res("b72", 72, list(range(9)), 750, variant="e6b750")])
+        self.assertTrue(s72["standard"])
+        self.assertIsNone(A.settle([_res("bad", 32, [5, 6, 7, 8], 833, "FAIL")])["choice"])
+
+    def test_profile_text_is_what_the_link_hook_reads(self):
+        p = A.profile_text(_res("s32", 32, [5, 6, 7, 8], 833), "hpz440_x32_5678", "evidence")
+        self.assertIn("set ::innova2_ddr_profile {name hpz440_x32_5678 lanes {5 6 7 8} variant dw8_833 ca RDRV_60_60}", p)
+        self.assertIn("prune_unused.tcl", p)
+
+    def test_cli_from_logs(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for n, t in (("s32_5678_833_ca60", _LOG_CLEAN), ("x64n1_833_ca60", _LOG_FAIL), ("b72r_dw8_750_ecc_ca60", _LOG_NOCAL)):
+                open(os.path.join(d, n + ".log"), "w").write(t)
+            rc, o, e = run_cli(MockHost(RC1), ["ddr-assess", "--from-logs", d, "--card-name", "hpz440"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("settled: s32_5678_833_ca60 -- 32-bit on lanes 5,6,7,8, DDR4-2401 (dw8_833)", o)
+        self.assertIn("one load only", o)
+        self.assertIn("lanes {5 6 7 8} variant dw8_833 ca RDRV_60_60}", o)
+        self.assertIn("param=compiler.userPreSysLinkOverlayTcl=", o)
+
+
+class _FakeTester:
+    """The tester static as a register model: hwicap (FIFO vacancy, self-clearing CR write, DONE), axi_gpio, and an RP
+    whose identity becomes the loaded partial's; BIST runs go BUSY then DONE with the configuration's error count."""
+
+    def __init__(self, configs):
+        self.configs, self.cur, self.loaded = configs, None, 0    # configs: name -> dict(width, lmap, tck, mb, cal, errors)
+        self.gpio, self.cr, self.fifo, self.fed, self.reg, self.bist_left = 0, 0, 0, [], {}, 0
+
+    def rd(self, o):
+        if o == 0x00:
+            return self.gpio
+        if o == 0x08:
+            return int(bool(self.cur) and self.configs[self.cur]["cal"] == 0x35)
+        if o == 0x20000 + A.WFV:
+            return 1023 - self.fifo
+        if o == 0x20000 + A.CR:
+            return self.cr
+        if o == 0x20000 + A.SR:
+            return 1
+        if o == 0x20000 + A.ASR:
+            return 0
+        if o >= 0x30000:
+            return 0xC5 if o == 0x30000 else 0x4002
+        c = self.configs.get(self.cur, {})
+        rp = o - 0x10000
+        if rp == A.B["STATUS"]:
+            if self.bist_left > 0:
+                self.bist_left -= 1
+                return A.BUSY
+            return A.DONE
+        return {A.B["MAGIC"]: 0x42495354 if c else 0x42495300, A.B["VERSION"]: self.loaded + 1, A.B["WIDTH"]: c.get("width", 0),
+                A.B["LMAP"]: c.get("lmap", 0), A.B["TCK"]: c.get("tck", 0), A.B["MEMMB"]: c.get("mb", 0),
+                A.B["CAL"]: c.get("cal", 0), A.B["ERR_LO"]: self.reg.get("err", 0), A.B["ERR_HI"]: 0}.get(rp, 0)
+
+    def wr(self, o, v):
+        if o == 0x00:
+            if self.gpio == 0x2 and v == 0x0 and self.fed:            # the RM leaves reset: the fed partial is live
+                self.cur = self.fed[0]; self.loaded += 1; self.fed = []
+            self.gpio = v
+        elif o == 0x20000 + A.WF:
+            self.fifo = min(1023, self.fifo + 1)
+            if v == 0xAA995566 and self.gpio == 0x3:
+                pass
+        elif o == 0x20000 + A.CR:
+            if v & 0x4:
+                self.fifo = 0
+            if v & 0x1:
+                self.fifo = 0                                          # the ICAP drains the FIFO; CR bit0 self-clears
+            self.cr = 0
+        elif o - 0x10000 == A.B["CTRL"]:
+            c = self.configs[self.cur]
+            self.bist_left = 2
+            self.reg["err"] = c["errors"] if c["cal"] == 0x35 else 0
+
+
+class _TesterIO:
+    def __init__(self, t):
+        self.t = t
+
+    def rd(self, o):
+        return self.t.rd(o)
+
+    def wr(self, o, v):
+        self.t.wr(o, v)
+
+
+class DdrAssessLiveTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.d = tempfile.mkdtemp()
+        self.cfgs = {"s32_5678_833_ca60": dict(width=32, lmap=0xFFFF8765, tck=833, mb=4096, cal=0x35, errors=0),
+                     "x64n1_833_ca60": dict(width=64, lmap=0x87654320, tck=833, mb=8192, cal=0x35, errors=7330),
+                     "b72r_dw8_750_ecc_ca60": dict(width=72, lmap=0x76543210, tck=750, mb=8192, cal=0x34, errors=0)}
+        for n in self.cfgs:      # a minimal .bit body: sync word + padding (the fake identifies the load by name)
+            open(os.path.join(self.d, "g2x2_rm_%s_partial.bit" % n), "wb").write(b"\xff" * 16 + b"\xaa\x99\x55\x66" + b"\x20\x00\x00\x00" * 8)
+        self.fake = _FakeTester(self.cfgs)
+        fake = self.fake
+        orig = A.Tester.pr_load
+
+        def pr_load(t, path):
+            fake.fed = [os.path.basename(path)[len("g2x2_rm_"):-len("_partial.bit")]]
+            return orig(t, path)
+        self.patch = (A.Tester, "pr_load", orig)
+        A.Tester.pr_load = pr_load
+
+    def tearDown(self):
+        setattr(*self.patch)
+
+    def host(self):
+        h = MockHost(RC1)
+        h.pci_devices = lambda: [dict(bdf="0000:03:00.0", vendor="0x10ee", device="0x9038", cls="0x070000", chain=[])]
+        h.regio = lambda bdf, n, regions, guard: _TesterIO(self.fake)
+        return h
+
+    def test_refuses_without_tester_or_yes(self):
+        rc, o, e = run_cli(MockHost(RC1), ["ddr-assess", "--partials", self.d])
+        self.assertIn("no DDR tester image running", e)
+        rc, o, e = run_cli(self.host(), ["ddr-assess", "--partials", self.d])
+        self.assertIn("add --yes", e)
+        self.assertEqual(self.fake.loaded, 0)
+
+    def test_assess_and_settle_on_a_simulated_card(self):
+        rc, o, e = run_cli(self.host(), ["ddr-assess", "--partials", self.d, "--yes", "--card-name", "hpz440"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("settled: s32_5678_833_ca60 -- 32-bit on lanes 5,6,7,8", o)
+        self.assertNotIn("one load only", o)                        # measured live: reloads confirmed
+        self.assertIn("NO-CAL", o)
+        self.assertIn("7330", o)
+        self.assertEqual(self.fake.loaded, 1 + 1 + 3)               # 72 + 64 once each; the clean 32-bit 1 + 2 reloads

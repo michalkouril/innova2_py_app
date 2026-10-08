@@ -684,6 +684,11 @@ def rate_items(sh, s0, s1):
     cfg = R.mig_config(sh.rom_ts)
     if not cfg:
         return [_item("ddr.rate_unverified", "no MIG table for ROM_TS %s" % sh.rom_ts, {})]
+    lm = R.loaded_mig(R.decode_ddr_info(*(sh.r(o) for o in (0x200, 0x204, 0x208, 0x20C, 0x210, 0x214)))) \
+        if R.is_routev(sh.lay) else None
+    if lm and lm["poll_cyc"]:                       # route V: the loaded xclbin's own MIG, not the template's
+        cfg = dict(cfg, ui_clk_mhz=lm["ui_clk_mhz"], poll_cyc=lm["poll_cyc"], loaded=True,
+                   speed_grade="DDR4-%d (loaded xclbin)" % round(lm["mts"]))
     ui, dp, dt = R.ui_clk_from_polls(r0[0x2C], r0[0xB4] << 32 | r0[0xB0], r1[0x2C], r1[0xB4] << 32 | r1[0xB0],
                                      cfg["poll_cyc"])
     if not ui:
@@ -691,7 +696,7 @@ def rate_items(sh, s0, s1):
     m = H.rate_result(cfg, ui, dp, dt, routev=R.is_routev(sh.lay))
     ev = dict(measured_ui_clk_mhz=m["ui_clk_mhz"], table_ui_clk_mhz=cfg["ui_clk_mhz"], measured_mts=m["mts"],
               table=cfg["speed_grade"], deviation_pct=m["vs_table_pct"], precision_pct=m["precision_pct"])
-    if R.is_routev(sh.lay):
+    if R.is_routev(sh.lay) and not cfg.get("loaded"):   # no KEPT xclbin reports its MIG: only the template to compare
         return [_item("ddr.rate_unverified", "route V: measured %.0f MT/s (template %s, %+.2f%%)" % (
             m["mts"], cfg["speed_grade"], m["vs_table_pct"]), ev)]
     if abs(m["vs_table_pct"]) > RULES["ddr.rate_mismatch"]["threshold"] + m["precision_pct"]:

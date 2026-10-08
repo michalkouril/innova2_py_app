@@ -1,3 +1,20 @@
+innova2-app (1.3.15) unstable; urgency=medium
+
+  * New: innova2-smi ddr-assess. On a card booted into the DDR tester image,
+    loads candidate DDR configurations (lanes, speed, CA drive) as partial
+    bitstreams, judges each by full self-checked read/write passes, reloads a
+    clean one and re-tests it, and settles on a route-V per-card DDR profile
+    (widest clean, then fastest, then CA drive). Prints / writes the profile
+    file and the link-config line that carries it. --from-logs settles from
+    existing tester campaign logs.
+  * ddr / status / check: on route V the measured DDR speed uses the LOADED
+    xclbin's MIG variant (POLL_CYC and reference from DDR_INFO), not the
+    template's. A DDR4-2400 profile xclbin read 2666 MT/s before.
+  * ddr -v: a 'this load' line with the loaded controller's speed, width,
+    ECC, CA drive and variant.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Thu, 08 Oct 2026 15:30:00 -0400
+
 innova2-app (1.3.14) unstable; urgency=medium
 
   * Read-only reports cover every card by default (owner convention):

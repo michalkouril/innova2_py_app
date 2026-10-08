@@ -37,11 +37,12 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import innova2_smi_check as C          # noqa: E402
+import innova2_smi_ddrassess as A      # noqa: E402
 import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.14"
+VERSION = "1.3.15"
 
 
 def _version():
@@ -769,6 +770,12 @@ def render_ddr(d, verbose=False):
     else:
         L.append("configuration: %s" % sp["table_source"])
     di = (rv or {}).get("ddr_info") or {}
+    lm = sp.get("loaded")
+    if lm:
+        L.append("  this load : DDR4-%d (%.1f MT/s), tCK %d ps, %d-bit, ECC %s, CA %s, MIG %s, ECC poll every %d ui_clk "
+                 "-- the template above does not apply to the loaded xclbin" % (
+                     round(lm["mts"]), lm["mts"], lm["tck_ps"], lm["width"], "on" if lm["ecc"] else "off",
+                     lm["ca_drive"], lm["variant"], lm["poll_cyc"] or 0))
     if di.get("kept"):
         L.append("loaded xclbin's controller (read from the card): DDR4-%d (tCK %d ps), CL%d CWL%d, %d-bit%s, CA %s, MIG %s, part %s" % (
             di["mts"], di["tck_ps"], di["cl"], di["cwl"], di["dq_width"], " ECC" if di["ecc"] else "", di["ca_drive"],
@@ -780,7 +787,8 @@ def render_ddr(d, verbose=False):
     if m.get("ui_clk_mhz"):
         L.append("measured    : %.1f MT/s (ui_clk %.3f MHz), +-%.2f%% (%d polls in %.3f s)%s" % (
             m["mts"], m["ui_clk_mhz"], m["precision_pct"], m["polls"], m["window_s"],
-            "; %+.2f%% vs the build" % m["vs_table_pct"] if "vs_table_pct" in m else ""))
+            ("; %+.2f%% vs the %s" % (m["vs_table_pct"], "loaded xclbin's controller" if sp.get("loaded") else "build"))
+            if "vs_table_pct" in m else ""))
         if verbose:
             L.append("  how       : %s" % m["formula"])
         if m.get("note"):
@@ -976,6 +984,90 @@ def counters_one(host, args, card, sh, detail):
         L.append("  %-9s : %s" % ("lock loss", ", ".join("%s %s" % kv for kv in locks)))
     L.append("  (%d counters in all)" % len(cs))
     return cs, "\n".join(L), 0
+
+
+DDR_ASSESS_HELP = """\
+Prerequisite: the card's User slot holds the DDR tester image (g2x2 static; PCI 10ee:9038, Gen1 x2, BAR0 32 MB) and
+the card was cold-started into it. Partial bitstreams g2x2_rm_<cfg>_partial.bit (one DDR configuration each: lanes,
+speed, CA drive) live in --partials. Names ending _ca60 / _ca48 / _ca40dflt carry that CA drive; others the MIG default
+(RDRV_40_40). Each candidate is judged by full read/write passes with the engine's self-check, never by calibration.
+
+Settling: widest clean configuration, then fastest, then CA drive (60 > 48 > 40 ohm), among those a route-V profile
+can use (8/16/32/64-bit on consecutive banks, tCK 750 or 833 ps). --write saves the profile file; a link config
+carries it with   [advanced] param=compiler.userPreSysLinkOverlayTcl=<profile file>
+
+--from-logs DIR settles from existing tester campaign logs instead (no card access; reloads then unconfirmed).
+"""
+
+
+def cmd_ddr_assess(host, args):
+    """Measure which DDR configuration this card's memory supports (DDR tester image) and settle on a route-V
+    per-card DDR profile for the link config."""
+    dna = None
+    if args.from_logs:
+        results = A.from_logs(args.from_logs, args.only)
+        if not results:
+            raise H.Refused("no campaign logs (*.log) in %s" % args.from_logs)
+    else:
+        ts = [d for d in host.pci_devices() if d["vendor"] == A.TESTER_VENDOR and d["device"] == A.TESTER_DEVICE
+              and (not args.bdf or d["bdf"].endswith(args.bdf))]
+        if not ts:
+            raise H.Refused("no DDR tester image running (PCI 10ee:9038%s): flash the g2x2 tester into the User slot "
+                            "and cold-start the card first (see --help)" % (" at " + args.bdf if args.bdf else ""))
+        if len(ts) > 1:
+            raise H.Refused("%d tester cards found (%s); choose one with --bdf" % (len(ts), ", ".join(d["bdf"] for d in ts)))
+        if not args.partials or not os.path.isdir(args.partials):
+            raise H.Refused("--partials <dir of g2x2_rm_*_partial.bit> is required")
+        cands = A.candidates(args.partials, args.only)
+        if not cands:
+            raise H.Refused("no g2x2_rm_*_partial.bit in %s%s" % (args.partials, " matching " + args.only if args.only else ""))
+        if not args.yes:
+            raise H.Refused("this reconfigures the tester's DDR partition %d times and writes the whole DDR: add --yes"
+                            % (len(cands) * (1 + args.reloads)))
+        t = A.Tester(host, ts[0]["bdf"])
+        dna = t.dna()
+        results = []
+        for i, c in enumerate(cands):
+            r = A.assess_one(t, c, reps=args.reps, reloads=args.reloads)
+            results.append(r)
+            if not args.json:
+                print(fit_text("[%d/%d] %-26s %-8s %s" % (i + 1, len(cands), c["name"], r["result"], r.get("why", "")),
+                               out_width()), flush=True)
+    s = A.settle(results)
+    ch = s["choice"]
+    name = args.name or (A.default_name(ch, args.card_name) if ch else None)
+    prof = None
+    if ch and not s["standard"]:
+        prof = A.profile_text(ch, name, "card DNA %s; %s: %s" % (dna or "n/a (from logs)", ch["name"], ch["why"]))
+        if args.write:
+            with open(args.write, "w") as fh:
+                fh.write(prof)
+    obj = dict(dna=dna, results=results, settled=dict(choice=ch, standard=s["standard"], why=s["why"], name=name,
+                                                       profile=prof, written=args.write if prof and args.write else None))
+    L = ["DDR assessment%s: %d configuration(s)" % (" of card DNA " + dna if dna else " from " + str(args.from_logs),
+                                                   len(results))]
+    L.append("  %-24s %3s %-17s %4s %3s  %s" % ("configuration", "bit", "lanes", "MT/s", "CA", "result"))
+    for r in sorted(results, key=A.rank_key):
+        L.append("  %-24s %3s %-17s %4s %3s  %s" % (
+            r["name"], r.get("width", "?"), ",".join(str(l) for l in r.get("lanes", [])) or "-",
+            round(2e6 / r["tck_ps"]) if r.get("tck_ps") else "?", r["ca"][5:7], r["result"]))
+        L.append("      %s" % r.get("why", ""))
+    if s["standard"]:
+        L.append("settled: %s is clean at 72-bit -- the standard platform DDR works; no profile needed" % ch["name"])
+    elif ch:
+        L.append("settled: %s -- %d-bit on lanes %s, DDR4-%d (%s), CA %s, %d MB%s" % (
+            ch["name"], ch["width"], ",".join(str(l) for l in ch["lanes"]), round(2e6 / ch["tck_ps"]), ch["variant"],
+            ch["ca"], ch["mem_mb"], "" if ch.get("reloads_confirmed", True) else
+            " -- from one load only: confirm on the card with reloads before relying on it"))
+    else:
+        L.append("settled: nothing -- %s" % s["why"])
+    out(args, obj, "\n".join(L))
+    if prof and not args.json:                     # verbatim (never folded): these lines are copied into files
+        print("profile%s:" % (" (written to %s)" % args.write if args.write else ""))
+        print("\n".join("  " + x for x in prof.rstrip().splitlines() if not x.startswith("#")))
+        print("link config:\n  [advanced]\n  param=compiler.userPreSysLinkOverlayTcl=%s" % (
+            os.path.abspath(args.write) if args.write else "<the profile file, next to prune_unused.tcl>"))
+    return 0 if ch else 1
 
 
 # ----------------------------------------------------------------------------------------------- recorder
@@ -1388,6 +1480,17 @@ def build_parser():
     q.add_argument("-n", type=int, default=None, help="the last N records (default 5 per card; -v: all)")
     q.add_argument("-v", "--verbose", action="store_true", help="every record")
     add("clear", cmd_clear, "zero the observability counters (confirmation)")
+    q = add("ddr-assess", cmd_ddr_assess, "measure the card's usable DDR (tester image) and settle on a link-config "
+            "DDR profile", epilog=DDR_ASSESS_HELP)
+    q.add_argument("--partials", help="directory of g2x2_rm_<cfg>_partial.bit candidates")
+    q.add_argument("--only", help="regex on the configuration names to assess")
+    q.add_argument("--bdf", help="the tester card's PCI address (when several)")
+    q.add_argument("--reps", type=int, default=2, help="self-checked full passes on the first load (default 2)")
+    q.add_argument("--reloads", type=int, default=2, help="reloads of a clean candidate, one pass each (default 2)")
+    q.add_argument("--from-logs", help="settle from tester campaign logs in this directory (no card access)")
+    q.add_argument("--name", help="profile name (default <card-name>_x<width>_<lanes>)")
+    q.add_argument("--card-name", default="card", help="prefix of the default profile name")
+    q.add_argument("--write", help="write the profile file here")
     q = add("ddr-mode", cmd_ddr_mode, "show or set the DDR mode (confirmation)")
     q.add_argument("mode", nargs="?", choices=list(R.MODES), help="on | off | emu | hybrid")
     q = add("throttle", cmd_throttle, "show / control / simulate-hot the thermal throttle (E7a2+)", epilog=THROTTLE_HELP)
@@ -1431,7 +1534,7 @@ def main(argv=None, host=None):
         p.print_help()
         return 1
     host = host or H.Host()
-    if args.cmd != "regmap" and not host.is_root():
+    if args.cmd != "regmap" and not (args.cmd == "ddr-assess" and args.from_logs) and not host.is_root():
         print("*** run as root (sysfs resources, VPD and the ConnectX node need it)", file=sys.stderr)
         return 1
     try:

@@ -701,7 +701,9 @@ def rate_result(cfg, ui, dp, dt, routev=False):
     if ui and cfg:
         out["vs_table_pct"] = round(100.0 * (ui - cfg["ui_clk_mhz"]) / cfg["ui_clk_mhz"], 2)
         out["poll_cyc"] = cfg["poll_cyc"]
-        if routev:
+        if cfg.get("loaded"):
+            out["note"] = "route V: POLL_CYC and the reference are the loaded xclbin's MIG variant (from DDR_INFO)"
+        elif routev:
             out["note"] = "route V: POLL_CYC and the MIG come from the KEPT xclbin; the template's values are assumed"
     return out
 
@@ -714,6 +716,15 @@ def ddr_speed(sh, window=1.5):
                "unknown build (ROM_TS %s): no MIG table" % sh.rom_ts)
     if sh.obs_id in R.DDR_INFO_MAPS:                   # hook: route V's DDR_INFO block, once its map exists
         out["ddr_info"] = {n: dec(sh.r(o)) for o, (n, dec) in R.DDR_INFO_MAPS[sh.obs_id]["regs"].items()}
+    # route V: a KEPT xclbin brings its own MIG -- measure against IT (its variant's POLL_CYC and tCK), not the template
+    lm = R.loaded_mig(R.decode_ddr_info(sh.r(0x200), sh.r(0x204), sh.r(0x208), sh.r(0x20C), sh.r(0x210), sh.r(0x214))) \
+        if R.is_routev(sh.lay) else None
+    if lm:
+        out["loaded"] = lm
+        if not lm["poll_cyc"]:
+            out["measured"] = dict(ui_clk_mhz=None, reason="POLL_CYC unknown for the loaded MIG variant %s" % lm["variant"])
+            return out
+        cfg = dict(cfg or {}, ui_clk_mhz=lm["ui_clk_mhz"], poll_cyc=lm["poll_cyc"], loaded=True)
     ok, why = ddr_ready_for_rate(sh)
     if not ok:
         out["measured"] = dict(ui_clk_mhz=None, reason=why)

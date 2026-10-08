@@ -240,6 +240,23 @@ def decode_ddr_info(w0, w1, w2, w3, edges, cfg):
                 ca_drive=CA_CODES.get(w2 >> 9 & 7, "?"), mig_variant=MIG_VARIANTS.get(w2 >> 12 & 0xF, "?"),
                 part_id="0x%08x" % w3, ui_clk_mhz_measured=round(ui_hz / 1e6, 3), ui_clk_window_valid=valid,
                 ui_clk_mhz_expected=round(1e6 / (4 * tck), 3) if tck else 0.0)
+# the ECC poller's POLL_CYC per MIG variant (the route-V link hook's mig_variant.tcl MIGV_POLL_CYC): the measured
+# ui_clk of a KEPT xclbin must use ITS variant's POLL_CYC, not the template's (2026-10-08: a dw8_833 xclbin -- 300000 --
+# measured with the e6b750 template's 333000 read 2666 MT/s on a DDR4-2400 controller)
+VARIANT_POLL_CYC = {"mwrnd833": 300000, "dw8_833": 300000, "e6b750": 333000}
+
+
+def loaded_mig(di):
+    """The loaded KEPT xclbin's MIG from its DDR_INFO (decode_ddr_info): speed, width, ECC, CA, variant, POLL_CYC;
+    None when no KEPT xclbin reports one."""
+    if not di or not di.get("kept") or not di.get("tck_ps"):
+        return None
+    tck = di["tck_ps"]
+    return dict(tck_ps=tck, mts=round(2e6 / tck, 1), ui_clk_mhz=round(1e6 / (4 * tck), 3), width=di["dq_width"],
+                ecc=di["ecc"], ca_drive=di["ca_drive"], variant=di["mig_variant"],
+                poll_cyc=VARIANT_POLL_CYC.get(di["mig_variant"]), cl=di["cl"], cwl=di["cwl"])
+
+
 RV_SIGNATURE = 0x5256
 
 
