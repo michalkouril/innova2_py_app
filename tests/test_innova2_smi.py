@@ -494,10 +494,20 @@ class MockHost:
         return dict(self.cx5)
 
 
-def run_cli(host, argv):
+def run_cli(host, argv, columns=0):
+    """The CLI as a user runs it. columns=0 (default): human output is not folded, so content assertions do not
+    depend on the layout; the width tests pass columns=80."""
     o, e = io.StringIO(), io.StringIO()
-    with redirect_stdout(o), redirect_stderr(e):
-        rc = SMI.main(argv, host=host)
+    old = os.environ.get("INNOVA2_SMI_COLUMNS")
+    os.environ["INNOVA2_SMI_COLUMNS"] = str(columns)
+    try:
+        with redirect_stdout(o), redirect_stderr(e):
+            rc = SMI.main(argv, host=host)
+    finally:
+        if old is None:
+            os.environ.pop("INNOVA2_SMI_COLUMNS", None)
+        else:
+            os.environ["INNOVA2_SMI_COLUMNS"] = old
     return rc, o.getvalue(), e.getvalue()
 
 
@@ -1820,13 +1830,58 @@ class BoardIdTests(unittest.TestCase):
         h.attrs_[("0000:09:00.0", "vpd")] = b"\x78"
         h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/board_id"] = b"MT_0000000158"
         h.files["/sys/bus/pci/devices/0000:09:00.0/infiniband/mlx5_0/fw_ver"] = b"16.28.2006"
-        rc, o, e = run_cli(h, ["list"])
+        rc, o, e = run_cli(h, ["list"], columns=80)
         self.assertEqual(rc, 0, e)
         self.assertEqual([x for x in o.splitlines() if len(x) > 80], [])
         for f in ("(VPD empty; PSID MT_0000000158 fw 16.28.2006: not identifiable)", "no xclbin (boot RM: filler)",
                   "ROM_TS 1792479600 (0x6ad71170)", "shell %s" % R.VBNV_ROUTEV):
             self.assertIn(f, o)
         self.assertTrue(o.startswith("card 0  ConnectX-5 "), o)
+
+
+class OutputWidthTests(unittest.TestCase):
+    """fit_text: human reports fold to the terminal (80 columns off a tty) at top-level separators only."""
+
+    def test_status_fits_80_and_keeps_labels(self):
+        h = RouteV2Tests().boot()
+        rc, o80, e = run_cli(h, ["status"], columns=80)
+        self.assertEqual([x for x in o80.splitlines() if len(x) > 80], [])
+        rc, wide, e = run_cli(h, ["status"])          # counters move between runs: fold this one report below
+        o = SMI.fit_text(wide, 80)
+        self.assertEqual([x for x in o.splitlines() if len(x) > 80], [])
+        labels = [x[:17] for x in wide.splitlines() if x[15:17] == ": "]
+        self.assertEqual([x[:17] for x in o.splitlines() if x[15:17] == ": "], labels)
+        # folding changes only whitespace: the same words in the same order
+        self.assertEqual(" ".join(o.split()), " ".join(wide.split()))
+        for x in o.splitlines():
+            if x.startswith(" " * 17):
+                self.assertTrue(x[17:18].strip(), "continuation not under the value column: %r" % x)
+
+    def test_check_verbose_fits_80(self):
+        h = MockHost(0x0B5E0007)
+        h.attrs_[("0000:09:00.0", "vpd")] = b"\x78"           # long WARN + hint lines (empty VPD)
+        rc, o, e = run_cli(h, ["check", "-v", "--since-boot"], columns=80)
+        self.assertEqual([x for x in o.splitlines() if len(x) > 80], [])
+        rc, wide, e = run_cli(h, ["check", "-v", "--since-boot"])
+        self.assertEqual(" ".join(SMI.fit_text(wide, 80).split()), " ".join(wide.split()))
+        self.assertIn("identity.vpd_empty", o)
+
+    def test_split_top_respects_brackets(self):
+        self.assertEqual(SMI.split_top("a (b, c; d), e; f -- g [h, i]"), ["a (b, c; d),", "e;", "f --", "g [h, i]"])
+
+    def test_short_lines_untouched_and_no_fold_switch(self):
+        self.assertEqual(SMI.fit_text("x: 1\n  y", 80), "x: 1\n  y")
+        line = "label          : " + ", ".join("item%d" % i for i in range(40))
+        self.assertEqual(SMI.fit_text(line, 1 << 30), line)
+        self.assertTrue(all(len(x) <= 60 for x in SMI.fit_text(line, 60).splitlines()))
+
+    def test_status_recorder_last_10(self):
+        h = MockHost(RV2)
+        h.model.records += [(17, 0, 1000 * k) for k in range(1, 15)]   # 15 records in the ring
+        st = json.loads(run_cli(h, ["status", "--json"])[1])
+        self.assertEqual(len(st["recorder"]["last"]), 10)
+        rc, o, e = run_cli(h, ["status"])
+        self.assertIn("last 10:", o)
 
 
 # ----------------------------------------------------------------------------------------------- DDR speed / MIG table

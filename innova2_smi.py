@@ -41,7 +41,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 
 
 def _version():
@@ -68,7 +68,7 @@ def out(args, obj, text):
     if getattr(args, "json", False):
         print(H.jdump(obj))
     else:
-        print(text)
+        print(fit_text(text, out_width()))
 
 
 def cards(host, args, query=True):
@@ -98,7 +98,11 @@ def fmt_bool(b, yes="yes", no="no"):
 
 
 def out_width():
-    """Columns to fit human output into: the terminal's width on a tty, else 80 (pipes, files, tests)."""
+    """Columns to fold human output to: INNOVA2_SMI_COLUMNS if set (0 = never fold), else the terminal's width on a tty,
+    else 80 (pipes, files)."""
+    env = os.environ.get("INNOVA2_SMI_COLUMNS", "").strip()
+    if env.isdigit():
+        return int(env) if int(env) > 0 else 1 << 30
     if sys.stdout.isatty():
         return max(60, shutil.get_terminal_size((80, 24)).columns)
     return 80
@@ -119,6 +123,79 @@ def wrap_fields(first, fields, width, indent=8):
             cur = cur + sep + f if cur.strip() else cur + f
     lines.append(cur)
     return "\n".join(lines)
+
+
+_SEPS = (", ", "; ", " -- ")
+
+
+def split_top(s):
+    """Split s after each ', ' / '; ' / ' -- ' that is outside (), [] and {}; the separator stays with the left piece.
+    Every piece is a unit the wrapper never breaks unless it alone is wider than a line."""
+    parts, depth, start, i = [], 0, 0, 0
+    while i < len(s):
+        ch = s[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            for sep in _SEPS:
+                if s.startswith(sep, i):
+                    parts.append(s[start:i + len(sep)].rstrip())
+                    i += len(sep)
+                    start = i
+                    break
+            else:
+                i += 1
+                continue
+            continue
+        i += 1
+    if start < len(s):
+        parts.append(s[start:])
+    return [p for p in parts if p]
+
+
+def fit_line(line, width):
+    """One output line folded to `width` without the terminal doing it: continuation lines hang under the value column
+    ('label          : value' -> under 'value'; an indented sub-line or a recorder record -> under its detail), and
+    breaks fall only between top-level pieces (split_top); a single piece wider than the room is word-wrapped."""
+    if len(line) <= width:
+        return [line]
+    lead = len(line) - len(line.lstrip(" "))
+    m = line.find(": ", lead)
+    if 0 < m <= lead + 22:                         # 'label          : ' -- hang under the value
+        hang = m + 2
+    else:                                          # '    0.000262 s RM_DDR         detail' -- hang under the detail
+        mm = None
+        for k, ch in enumerate(line[lead:], lead):
+            if ch == " " and k + 1 < len(line) and line[k + 1] != " " and line[k - 1] == " " and k - lead >= 12:
+                mm = k + 1
+                break
+        hang = mm if mm and mm <= width // 2 else lead + 4
+    hang = min(hang, width // 2)
+    cur, fresh, lines = line[:hang], True, []    # fresh: nothing on the current line after its label / indent yet
+    for piece in split_top(line[hang:]):
+        if len(cur) + len(piece) + (0 if fresh else 1) <= width:
+            cur, fresh = cur + (piece if fresh else " " + piece), False
+            continue
+        if not fresh:
+            lines.append(cur.rstrip())
+            cur, fresh = " " * hang, True
+        if len(cur) + len(piece) <= width:
+            cur, fresh = cur + piece, False
+            continue
+        for seg in textwrap.wrap(piece, width - hang, break_long_words=False, break_on_hyphens=False) or [piece]:
+            if not fresh:                          # a piece wider than a whole line: its words
+                lines.append(cur.rstrip())
+                cur = " " * hang
+            cur, fresh = cur + seg, False
+    lines.append(cur.rstrip())
+    return lines
+
+
+def fit_text(text, width):
+    """Every line of a human-readable report folded to the terminal (80 columns when not a tty); see fit_line."""
+    return "\n".join(l for line in text.split("\n") for l in fit_line(line, width))
 
 
 def wrap_text(text, width, indent=8, hang=2):
@@ -234,7 +311,7 @@ def collect_status(host, card, sh):
         st["throttle"] = H.throttle(sh)
         st["pr"] = H.pr(sh)
         st["last_events"] = H.last_events(sh, up["seconds"])
-        inf, recs = H.recorder(sh, last=5)
+        inf, recs = H.recorder(sh, last=10)
         st["recorder"] = dict(inf, last=recs)
     st["pcie"] = H.pcie(sh)
     st["uptime"] = up
@@ -352,8 +429,8 @@ def render_status(st):
     if st.get("ddr_speed"):
         L.append("DDR speed      : " + ddr_speed_line(st["ddr_speed"]))
     e = d["ecc"]
-    L.append("ECC%s: %d corrected, %d uncorrectable polls%s, ECC %s, poller %s, %d polls" % (
-        " (cumulative)" if rv else "            ",
+    L.append("%s: %d corrected, %d uncorrectable polls%s, ECC %s, poller %s, %d polls" % (
+        "ECC total      " if rv else "ECC            ",     # route V: cumulative since configuration ('this load' above)
         e["ce"], e["ue_polls"], " (UE SEEN)" if e["ue_seen"] else "", fmt_bool(e["ecc_on"], "on", "OFF"),
         fmt_bool(e["poller_alive"], "alive", "NEVER POLLED"), e["polls"]))
     for k in ("first_ce", "first_ue"):
@@ -592,7 +669,7 @@ def cmd_check(host, args):
     if args.json:
         print(H.jdump(res if len(res) > 1 else res[0]))
     else:
-        print("\n".join(C.render(r, verbose=args.verbose) for r in res))
+        print(fit_text("\n".join(C.render(r, verbose=args.verbose) for r in res), out_width()))
     return max(C.SEV_ORDER[r["severity"]] for r in res)
 
 
