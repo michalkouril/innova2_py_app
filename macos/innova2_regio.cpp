@@ -15,7 +15,8 @@
 //   clock <bus> <dev> <index>                   -> "ok <MHz>"             (kernel clock counter, 0..2)
 //   uuid <bus> <dev>                            -> "ok <32 hex>"          (UUID of the xclbin the dext loaded)
 //   quit
-// Errors: "err <reason>". READ-ONLY: the dext maps BARs read-only (kIOUserClientMemoryReadOnly) and this tool has no
+//   w <bus> <dev> <func> <bar> <off> <val>      -> "ok <readback>"       (XRT_DEXT_REG_WRITE; mgmt BAR0, Innova-2 windows)
+// Errors: "err <reason>". Reads only through the mapping: the dext maps BARs read-only (kIOUserClientMemoryReadOnly) and this tool has no
 // write request. Built against the port's xrt_dext_abi.h; refuses a dext whose ABI version differs (a tool built
 // against another ABI silently reads the wrong selectors -- see the port's build_tools.sh).
 #include <IOKit/IOKitLib.h>
@@ -74,7 +75,7 @@ int main() {
   if (open_all() < 0) { puts("err no IOKit matching for " XRT_DEXT_USER_CLASS); return 1; }
   char line[512];
   while (fgets(line, sizeof line, stdin)) {
-    char cmd[16] = {0}; unsigned b, d, f, n; unsigned long long off, cnt;
+    char cmd[16] = {0}; unsigned b, d, f, n; unsigned long long off, cnt, val;
     if (sscanf(line, "%15s", cmd) != 1) continue;
     if (!strcmp(cmd, "quit")) break;
     if (!strcmp(cmd, "list")) {
@@ -120,6 +121,21 @@ int main() {
       unsigned char u[16] = {0}; size_t sz = sizeof(u);
       if (IOConnectCallStructMethod(x->conn, XRT_DEXT_GET_XCLBIN_UUID, nullptr, 0, u, &sz) != KERN_SUCCESS) { puts("err uuid"); continue; }
       printf("ok "); for (unsigned char c : u) printf("%02x", c); printf("\n"); continue;
+    }
+    // w <bus> <dev> <func> <bar> <off> <val> -> "ok <readback>": one 32-bit write through the dext's
+    // XRT_DEXT_REG_WRITE (selector 36), which allows only the management function's BAR0, only on an Innova-2 shell
+    // (feature ROM VBNV "innova2_*"), only inside its two register windows -- the dext enforces all of it
+    if (!strcmp(cmd, "w") && sscanf(line, "%*s %x %x %x %x %llx %llx", &b, &d, &f, &n, &off, &val) == 6) {
+#ifdef XRT_DEXT_REG_WRITE_VBNV_PREFIX   /* the patch defines this macro; XRT_DEXT_REG_WRITE itself is an enum value */
+      fn* x = find(b, d, f); if (!x) { puts("err no such function"); continue; }
+      if (f != 0 || n != 0) { puts("err writes go to the management function's BAR0 only"); continue; }
+      uint64_t in[2] = { off, val }, out = 0; uint32_t nout = 1;
+      kern_return_t kr = IOConnectCallScalarMethod(x->conn, XRT_DEXT_REG_WRITE, in, 2, &out, &nout);
+      if (kr != KERN_SUCCESS) { printf("err write 0x%llx: 0x%x\n", off, kr); continue; }
+      printf("ok %x\n", (uint32_t)out); continue;
+#else
+      puts("err this innova2_regio was built against a dext without XRT_DEXT_REG_WRITE"); continue;
+#endif
     }
     bool bulk = !strcmp(cmd, "rb");
     if ((!strcmp(cmd, "r") && sscanf(line, "%*s %x %x %x %x %llx", &b, &d, &f, &n, &off) == 5) ||

@@ -1249,7 +1249,9 @@ def xrt_memory(host, card, sh=None, ctx=None):
     mt = host.raw(user, "icap.*/mem_topology", 1 << 20)
     src = "/sys/bus/pci/devices/%s/icap.*/{mem_topology,ip_layout,connectivity}" % user
     if mt is None:
-        return dict(available=False, reason="no icap mem_topology under %s (xocl too old or icap not probed)" % user,
+        why = ("no xclbin has been loaded through the XRT macOS dext since it attached (load one with xrt-smi)"
+               if getattr(host, "platform", "linux") == "macos" else "no icap mem_topology under %s (xocl too old or icap not probed)" % user)
+        return dict(available=False, reason=why,
                     xclbin_uuid=uuid or None)
     banks = parse_mem_topology(mt)
     loaded = bool(uuid.replace("-", "").strip("0")) and bool(banks)

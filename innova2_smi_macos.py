@@ -129,10 +129,27 @@ class MacRegIO:
             raise H.Refused("register read 0x%x on %s failed: %s" % (off, self.fn["bdf"], r))
         return int(r.split()[1], 16)
 
+    # kern_return_t of XRT_DEXT_REG_WRITE -> why the write did not happen
+    WRITE_ERRORS = {0xe00002c2: "the XRT macOS dext has no register-write call (XRT_DEXT_REG_WRITE, selector 36) -- "
+                                "apply mac_regwrite.patch to the XRT macOS port and rebuild/activate the dext",
+                    0xe00002c7: "the XRT macOS dext has no register-write call (XRT_DEXT_REG_WRITE, selector 36) -- "
+                                "apply mac_regwrite.patch to the XRT macOS port and rebuild/activate the dext",
+                    0xe00002e2: "the dext refused it: not the management function, not an Innova-2 shell, or outside "
+                                "its register windows (0x32000-0x32FFF, 0x36000-0x36FFF)",
+                    0xe00002d8: "the dext refused it: the card is asleep", 0xe00002c0: "the dext has no device"}
+
     def wr(self, off, val):
+        """One 32-bit write through the dext's XRT_DEXT_REG_WRITE: management function, BAR0, inside innova2-smi's
+        register windows. The same guard and region rules as Linux apply first."""
         self.guard.check_write(off)
-        raise H.Refused("register write 0x%x refused: %s -- the XRT macOS dext maps BARs read-only, so commands that "
-                        "write registers need a register-write call in the dext" % (off, NOT_ON_MACOS))
+        self._check(off)
+        r = self.host.regio_helper().ask("w %x %x %x %x %x %x" % (self.fn["bus"], self.fn["dev"], self.fn["func"],
+                                                                 self.bar, off, val & 0xFFFFFFFF))
+        if r.startswith("ok "):
+            return
+        kr = r.rsplit(" ", 1)[-1]
+        why = self.WRITE_ERRORS.get(int(kr, 16), r) if kr.startswith("0x") else r
+        raise H.Refused("register write 0x%x refused: %s" % (off, why))
 
 
 class MacHost(H.Host):

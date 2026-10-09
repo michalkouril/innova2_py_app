@@ -2723,8 +2723,8 @@ _FIX = os.path.join(os.path.dirname(__file__), "macos_fixtures")
 class _FakeRegio:
     """innova2_regio answering from the route V r3 card model; read-only like the real dext mapping."""
 
-    def __init__(self, model, rom_words):
-        self.model, self.rom = model, rom_words
+    def __init__(self, model, rom_words, regwrite=False):
+        self.model, self.rom, self.regwrite = model, rom_words, regwrite
 
     def list(self):
         return [dict(bdf="0000:43:00.0", bus=0x43, dev=0, func=0, vendor=0x10ee, device=0x788f, link_status=0x1083,
@@ -2747,18 +2747,26 @@ class _FakeRegio:
             return "ok %x" % (self.model.user_read(off) if func == 1 else self.model.read(off))
         if cmd == "cfg":
             return "ok 100006"
+        if cmd == "w":                         # XRT_DEXT_REG_WRITE: an unpatched dext answers kIOReturnBadArgument
+            off, val = int(f[5], 16), int(f[6], 16)
+            if not self.regwrite:
+                return "err write 0x%x: 0xe00002c2" % off
+            if int(f[3], 16) != 0 or not (0x32000 <= off < 0x33000 or 0x36000 <= off < 0x37000):
+                return "err write 0x%x: 0xe00002e2" % off
+            self.model.write(off, val)
+            return "ok %x" % self.model.read(off)
         return "err unsupported"
 
 
 class MacHostTests(unittest.TestCase):
-    def mac(self):
+    def mac(self, regwrite=False):
         mh = MockHost(RV3)
         model = mh.model
         rom = [int(x, 16) for x in open(os.path.join(_FIX, "regio_list_rom.txt")).read().splitlines()[-1].split()[1:]]
         h = MAC.MacHost()
         h.run = lambda cmd, timeout=60, env=None: (0, open(os.path.join(_FIX, "ioreg_pci.txt")).read()) \
             if cmd[0] == "ioreg" else (1, "")
-        fake = _FakeRegio(model, rom)
+        fake = _FakeRegio(model, rom, regwrite)
         h.regio_helper = lambda: fake
         h.now, h.sleep = mh.now, mh.sleep           # the card model's counters run on the mock's clock
         return h, model
@@ -2808,9 +2816,25 @@ class MacHostTests(unittest.TestCase):
         self.assertIn("used    : bank0 KEPT", o)
         self.assertIn("4 GB", run_cli(h, ["memory", "-v"])[1])
 
-    def test_writes_refused(self):
+    def test_writes_refused_by_an_unpatched_dext(self):
         h, model = self.mac()
         rc, o, e = run_cli(h, ["ddr-mode", "off", "--yes"])
         self.assertNotEqual(rc, 0)
-        self.assertIn("read-only", e + o)
+        self.assertIn("no register-write call", e + o)
+        self.assertIn("mac_regwrite.patch", e + o)
         self.assertEqual(model.writes, [])
+
+    def test_writes_through_the_dext_register_write_call(self):
+        """with XRT_DEXT_REG_WRITE (selector 36) the control commands work on macOS as on Linux"""
+        h, model = self.mac(regwrite=True)
+        rc, o, e = run_cli(h, ["ddr-mode", "off", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn(R.MODE_REG, [w[0] for w in model.writes])
+        rc, o, e = run_cli(h, ["recorder"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn(R.STATUS + 0x18C, [w[0] for w in model.writes])
+
+    def test_memory_message_names_the_dext_on_macos(self):
+        h, model = self.mac()
+        o = run_cli(h, ["memory"])[1]
+        self.assertIn("no xclbin has been loaded through the XRT macOS dext", o)
