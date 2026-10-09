@@ -324,6 +324,9 @@ def discover(host):
 def cx5_health(host, card):
     """The ConnectX-5 side: driver, firmware, the mlx5_fpga_tools/innova2_areg node, devlink health. Bounded."""
     nic = card["cx5"][0]
+    if getattr(host, "platform", "linux") == "macos":   # no mlx5 driver, devlink or MFT on macOS
+        return dict(bdf=nic, driver=None, node=None, fw_ver=None, devlink=None,
+                    notes=["ConnectX-5 health: not available on macOS (no mlx5 driver)"])
     out = dict(bdf=nic, driver=host.driver(nic), node=None, fw_ver=None, devlink=None, notes=[])
     node = "/dev/%s_mlx5_fpga_tools" % nic
     out["node"] = node if host.exists(node) else None
@@ -399,7 +402,8 @@ def board_id(host, card):
     raw = host.bounded(lambda: host.raw(nic, "vpd"), 10, None)
     fw = cx5_fw_ident(host, nic)
     if not raw:
-        return dict(error="cannot read the VPD of %s (root needed, or it timed out)" % nic, nic=nic, **fw)
+        why = "not available on macOS" if getattr(host, "platform", "linux") == "macos" else "root needed, or it timed out"
+        return dict(error="cannot read the VPD of %s (%s)" % (nic, why), nic=nic, **fw)
     v = R.parse_vpd(raw)
     v["nic"] = nic
     v.update(fw)

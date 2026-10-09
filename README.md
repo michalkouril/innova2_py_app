@@ -149,6 +149,18 @@ Either way, then select the User image and **cold** cycle the host. The FPGA rea
 E7a3-2666ca48). It finds every card from its ConnectX-5, works out what the FPGA is running, and reads the shell's
 health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, XRT's sysfs). Run it as root.
 
+**macOS (1.3.17, read-only).** `innova2-smi` also runs on macOS against the XRT macOS port's DriverKit extension
+(`org.xrtmac.XrtUser`). Build the register helper against the port's ABI header and install for the current user:
+`macos/build.sh [<port>/src/runtime_src/core/pcie/driver/macos/XrtUser]` then `macos/install.sh`
+(-> `~/.local/bin/innova2-smi`). It is picked automatically on macOS (`innova2_smi_macos.MacHost`): PCI topology, IDs and
+link state from the IOKit device tree (`ioreg`), shell registers and PCI configuration space through `innova2_regio`
+(holds the dext's BAR mappings), the feature ROM through the user function. Works: `list`, `status`, `ddr`, `memory`
+(where the loaded xclbin's topology is readable), `counters`, `check`, `regmap`, `ddr-assess --from-logs`.
+**Read-only:** the dext maps BARs read-only, so commands that write registers (`recorder`, `ddr-mode`, `clear`,
+`throttle`, `test`) are refused with that reason; `status` shows the flight recorder as not available. Not available on
+macOS: ConnectX-5 access (no mlx5 driver), PCIe AER counters, VPD, xocl/xclmgmt sysfs reports (clock frequencies); the
+boot-xsabin check does not apply (the port identifies these shells by their feature ROM).
+
 **Output convention (owner, 2026-10-08; 1.3.14):** every read-only report run **without parameters prints a short
 summary for every card** in the host -- `status`, `ddr`, `memory`, `counters`, `recorder`, and (as before) `list`,
 `check`, `ecc-baseline`. Details come with `-v`; `-d CARD` narrows to one card. A read-only report never refuses

@@ -2713,3 +2713,78 @@ class DdrAssessSequenceTests(DdrAssessLiveTests):
         self.assertEqual(rc, 0, e)
         self.assertIn("standard platform DDR works", o)
         self.assertEqual(self.fake.loaded, 3)                         # one image: load + 2 reloads
+
+
+# ---- macOS back end (2026-10-09): innova2-smi through the XRT macOS port's DriverKit extension ----
+import innova2_smi_macos as MAC    # noqa: E402
+_FIX = os.path.join(os.path.dirname(__file__), "macos_fixtures")
+
+
+class _FakeRegio:
+    """innova2_regio answering from the route V r3 card model; read-only like the real dext mapping."""
+
+    def __init__(self, model, rom_words):
+        self.model, self.rom = model, rom_words
+
+    def list(self):
+        return [dict(bdf="0000:43:00.0", bus=0x43, dev=0, func=0, vendor=0x10ee, device=0x788f, link_status=0x1083,
+                     link_caps=0x43f083, bars=[0x2000000, 0x1000, 0, 0, 0, 0]),
+                dict(bdf="0000:43:00.1", bus=0x43, dev=0, func=1, vendor=0x10ee, device=0x6a90, link_status=0x1083,
+                     link_caps=0x43f083, bars=[0x2000000, 0, 0x10000, 0, 0x10000000, 0])]
+
+    def ask(self, req):
+        f = req.split(); cmd = f[0]
+        func, off = int(f[3], 16), int(f[-1] if cmd == "r" else f[5], 16) if cmd in ("r", "rb") else 0
+        if cmd == "rb" and func == 1 and int(f[5], 16) == MAC.FEATURE_ROM:
+            return "ok " + " ".join("%x" % w for w in self.rom[:int(f[6], 16)])
+        if cmd == "r":
+            return "ok %x" % (self.model.user_read(off) if func == 1 else self.model.read(off))
+        if cmd == "cfg":
+            return "ok 100006"
+        return "err unsupported"
+
+
+class MacHostTests(unittest.TestCase):
+    def mac(self):
+        mh = MockHost(RV3)
+        model = mh.model
+        rom = [int(x, 16) for x in open(os.path.join(_FIX, "regio_list_rom.txt")).read().splitlines()[-1].split()[1:]]
+        h = MAC.MacHost()
+        h.run = lambda cmd, timeout=60, env=None: (0, open(os.path.join(_FIX, "ioreg_pci.txt")).read()) \
+            if cmd[0] == "ioreg" else (1, "")
+        fake = _FakeRegio(model, rom)
+        h.regio_helper = lambda: fake
+        h.now, h.sleep = mh.now, mh.sleep           # the card model's counters run on the mock's clock
+        return h, model
+
+    def test_topology_from_ioreg(self):
+        t = {d["bdf"]: d for d in MAC.parse_ioreg(open(os.path.join(_FIX, "ioreg_pci.txt")).read())}
+        self.assertEqual((t["0000:43:00.0"]["device"], t["0000:43:00.0"]["cls"]), ("0x788f", "0x120000"))
+        self.assertEqual(t["0000:43:00.0"]["chain"][-2:], ["0000:03:00.0", "0000:04:08.0"])     # card switch, FPGA port
+        self.assertEqual(t["0000:05:00.0"]["chain"][-2:], ["0000:03:00.0", "0000:04:10.0"])     # same switch, NIC port
+
+    def test_feature_rom(self):
+        w = [int(x, 16) for x in open(os.path.join(_FIX, "regio_list_rom.txt")).read().splitlines()[-1].split()[1:]]
+        self.assertEqual(MAC.parse_feature_rom(w), ("innova2_innova2_noddr_202320_3", 1792486800))
+        self.assertEqual(MAC.parse_feature_rom([0] * 40), (None, None))
+
+    def test_list_status_check_on_the_mac_card(self):
+        h, model = self.mac()
+        o = run_cli(h, ["list"])[1]
+        self.assertIn("FPGA 0000:43:00.0 10ee:788f [xclmgmt], 0000:43:00.1 10ee:6a90 [xocl]", o)
+        self.assertIn("ROM_TS 1792486800 (0x6ad72d90)  OBS_ID 0x0B5E000D", o)
+        self.assertIn("not available on macOS", o)
+        self.assertNotIn("modprobe", o)
+        rc, o, e = run_cli(h, ["status", "-v"])
+        self.assertEqual(rc, 0, e)
+        self.assertIn("flight recorder: not available here -- register write", o)
+        rc, o, e = run_cli(h, ["check"])
+        self.assertNotIn("FAIL", o)
+        self.assertNotIn("platform.no_xsabin", run_cli(h, ["check", "-v"])[1])
+
+    def test_writes_refused(self):
+        h, model = self.mac()
+        rc, o, e = run_cli(h, ["ddr-mode", "off", "--yes"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("read-only", e + o)
+        self.assertEqual(model.writes, [])

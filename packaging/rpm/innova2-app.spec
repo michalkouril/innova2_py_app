@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.16
+Version: 1.3.17
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -54,7 +54,7 @@ grep -qx 'PACKAGE_VERSION="%{dkms_ver}"' innova2_areg_kmod/dkms.conf
 %install
 install -d %{buildroot}%{_prefix}/lib/innova2-app %{buildroot}%{_bindir} %{buildroot}%{_localstatedir}/lib/innova2-app
 install -m 755 innova2_app.py rawspi.py innova2_areg.sh innova2_smi.py %{buildroot}%{_prefix}/lib/innova2-app/
-install -m 644 innova2_smi_regmap.py innova2_smi_hw.py innova2_smi_check.py innova2_smi_ddrassess.py innova2_smi_tests.py innova2_smi_xrt.py \
+install -m 644 innova2_smi_regmap.py innova2_smi_hw.py innova2_smi_check.py innova2_smi_ddrassess.py innova2_smi_macos.py innova2_smi_tests.py innova2_smi_xrt.py \
     VERSION %{buildroot}%{_prefix}/lib/innova2-app/
 ln -s ../lib/innova2-app/innova2_app.py %{buildroot}%{_bindir}/innova2_app
 ln -s ../lib/innova2-app/innova2_areg.sh %{buildroot}%{_bindir}/innova2_areg
@@ -108,6 +108,8 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Fri Oct 09 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.17-0.1
+- macOS back end (read-only) for the XRT macOS port; untested as an RPM.
 * Thu Oct 08 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.16-0.1
 - ddr-assess staged sequence over the tester-image library; untested as an RPM.
 * Thu Oct 08 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.15-0.1

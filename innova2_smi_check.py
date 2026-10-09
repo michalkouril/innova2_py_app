@@ -39,6 +39,8 @@ RULES = {
     "fpga.other":             dict(sev="WARN", hint="the FPGA runs a design that is not an Innova-2 XRT shell"),
     "cx5.inconsistent":       dict(sev="FAIL", hint="the ConnectX's view of the FPGA disagrees with what is on the bus"),
     "cx5.health":             dict(sev="WARN", hint="the ConnectX-5 itself needs attention"),
+    "platform.macos":         dict(sev="INFO", hint="macOS (XRT macOS port): ConnectX-5 access, AER counters and boot "
+                                                    "xsabins do not apply; register access is read-only"),
     "cx5.no_node":            dict(sev="INFO", hint="load mlx5_fpga_tools (OFED 5.2) or innova2_areg (this package) "
                                                     "for the image query: innova2-smi list --load-module --yes"),
     "cx5.query":              dict(sev="INFO", hint="the ConnectX-5 FPGA query could not run"),
@@ -710,6 +712,10 @@ def platform_items(sh):
     h, items = sh.host, []
     if not sh.rom_ts:
         return items
+    if getattr(h, "platform", "linux") == "macos":
+        # the XRT macOS port identifies this shell by its feature ROM and needs no boot xsabin
+        return [_item("platform.macos", "macOS: no boot xsabin needed (the XRT macOS port identifies %s by its feature "
+                      "ROM)" % sh.vbnv, dict(vbnv=sh.vbnv, rom_ts=sh.rom_ts))]
     x = "/lib/firmware/xilinx/10ee-%s-4351-%016x.xsabin" % (R.FPGA_MGMT_DEV[2:], sh.rom_ts)
     if not h.exists(x):
         items.append(_item("platform.no_xsabin", "no boot xsabin for ROM_TS 0x%08x" % sh.rom_ts, dict(expected=x)))
@@ -798,6 +804,8 @@ def card_items(host, card):
         for n in hl["notes"]:
             if n.startswith("no /dev/"):
                 items.append(_item("cx5.no_node", n, dict(node=hl.get("node"))))
+            elif "not available on macOS" in n:
+                items.append(_item("platform.macos", n, dict()))
             else:
                 items.append(_item("cx5.health", n, dict(driver=hl.get("driver"), fw=hl.get("fw_ver"))))
     return items

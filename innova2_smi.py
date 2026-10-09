@@ -42,7 +42,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.16"
+VERSION = "1.3.17"
 
 
 def _version():
@@ -374,8 +374,11 @@ def collect_status(host, card, sh):
         st["throttle"] = H.throttle(sh)
         st["pr"] = H.pr(sh)
         st["last_events"] = H.last_events(sh, up["seconds"])
-        inf, recs = H.recorder(sh, last=10)
-        st["recorder"] = dict(inf, last=recs)
+        try:
+            inf, recs = H.recorder(sh, last=10)
+            st["recorder"] = dict(inf, last=recs)
+        except H.Refused as e:        # macOS: the dext maps BARs read-only and the recorder needs an index write
+            st["recorder"] = dict(unavailable=str(e))
     st["pcie"] = H.pcie(sh)
     st["uptime"] = up
     st["p2p"] = H.p2p(sh)
@@ -557,7 +560,9 @@ def render_status(st):
         L.append("  PLRAM alias  : %s, window %s (2^%d) -> %s; %d writes / %d reads redirected" % (
             fmt_bool(al["enabled"], "enabled", "disabled"), al["alias"], al["win_log2"], al["target"], al["writes"],
             al["reads"]))
-    if "recorder" in st:
+    if st.get("recorder", {}).get("unavailable"):
+        L.append("flight recorder: not available here -- %s" % st["recorder"]["unavailable"].split(" -- ")[0])
+    elif "recorder" in st:
         r = st["recorder"]
         now = st["uptime"]["seconds"]
         L.append("flight recorder: %d written (ring of %d, wrapped %d x); last %d; now = FPGA uptime %.6f s (%s):" % (
@@ -1561,6 +1566,9 @@ def main(argv=None, host=None):
     if not getattr(args, "fn", None):
         p.print_help()
         return 1
+    if host is None and sys.platform == "darwin":        # the XRT macOS port's DriverKit extension (read-only)
+        import innova2_smi_macos as MAC
+        host = MAC.MacHost()
     host = host or H.Host()
     if args.cmd != "regmap" and not (args.cmd == "ddr-assess" and args.from_logs) and not host.is_root():
         print("*** run as root (sysfs resources, VPD and the ConnectX node need it)", file=sys.stderr)

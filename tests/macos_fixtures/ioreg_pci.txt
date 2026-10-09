@@ -1,0 +1,659 @@
++-o pci-bridge0@0  <class IOPCIDevice, id 0x1000004f2, registered, matched, active, busy 0 (1942 ms), retain 12>
+  | {
+  |   "#msi-vectors" = <08000000>
+  |   "IOPCIExpressDeviceCapabilities2" = 68639
+  |   "built-in" = <>
+  |   "IOInterruptControllers" = ("apcie-0")
+  |   "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=64},{"capability"="MSICapability","offset"=80},{"capability"="PCIExpressCapability","offset"=112},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="SPCIe","offset"=328},{"capability"="PL16GTs","offset"=344},{"capability"="LaneMarginingRx","offset"=380},{"capability"="L1PMSubstatesCapability","offset"=400},{"capability"="VSEC","offset"=416},{"capability"="DataLinkFeature","offset"=672},{"capability"="PrecisionTimeManagementCapability","offset"=684},{"capability"="VSEC","offset"=696})
+  |   "IOPCIMSIMessageControl" = 128
+  |   "AppleEmbeddedPCIEPort" = "AppleT8103PCIePort is not serializable"
+  |   "pci-aspm-default" = 2
+  |   "reg" = <0000000000000000000000000000000000000000>
+  |   "function-perst" = <7b0000004f4950479800000000000000>
+  |   "t-refclk-to-perst" = <64000000>
+  |   "function-dart_release_sid" = <530000006c655253>
+  |   "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="pci-bridge0 0"})
+  |   "manual-enable-s2r" = <>
+  |   "default-apcie-options" = <0100f080>
+  |   "IOName" = "pci-bridge"
+  |   "function-dart_request_sid" = <5300000071655253>
+  |   "IOPCIExpressRootCapabilities" = 1
+  |   "IOPCIExpressLinkCapabilities" = 7567380
+  |   "IOPCIPTMCapabilities" = 4102
+  |   "#size-cells" = <02000000>
+  |   "pci-max-payload-size" = <00000000>
+  |   "function-dart_force_active" = <5300000074636146>
+  |   "ranges" = <00000082000000c00000000000000082000000c0000000000000d00000000000000000c20000000000000000000000c2000000000000000000000000000000000000008100000000000000000000008100000000000000000000000000000000>
+  |   "apcie-config-tunables" = <4001000004000000010000000000000001000000000000004401000004000000ffffff0000000000703725000000000000080000040000000000ff00000000000000100000000000>
+  |   "IOPMResetPowerStateOnWake" = Yes
+  |   "maximum-link-speed" = <02000000>
+  |   "IODTPersist" = 0
+  |   "class-code" = <00040600>
+  |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+  |   "IOPCIResourced" = Yes
+  |   "function-clkreq" = <7b0000004f4950479600000002000000>
+  |   "name" = <"pci-bridge0">
+  |   "IOInterruptSpecifiers" = (<0000000000000000>)
+  |   "AAPL,phandle" = <50000000>
+  |   "msi-vector-base" = <00000000>
+  |   "IOPCIExpressLinkCapabilities2" = 25165854
+  |   "IOReportLegendPublic" = Yes
+  |   "compatible" = <"apcie-bridge">
+  |   "revision-id" = <01000000>
+  |   "device-id" = <0c100000>
+  |   "manual-enable" = <>
+  |   "apcie-port" = <00000000>
+  |   "pcie-rc-tunables" = <940100000400000000fffb00000000000000000000000000a40200000400000000000080000000000000000000000000900800000400000001000000000000000000000000000000800b0000040000003f3f7f3f0000000020321f1d00000000840b0000040000003f3f0000000000003f3f000000000000780000000400000000700000000000000000000000000000>
+  |   "pci-l1pm-control" = <0f19554000000000>
+  |   "IOPCIL1PMCapabilities" = 31
+  |   "IOPCIExpressLinkStatus" = 4113
+  |   "perst-to-config" = <64000000>
+  |   "IOPCIDeviceDeviceTreeEntry" = "IOService is not serializable"
+  |   "pcie-rc-gen4-shadow-tunables" = <7801000004000000ff000000000000004400000000000000900800000400000000000003000000000000000100000000a80800000400000000ffff00000000000010000000000000>
+  |   "IOPCIConfigured" = Yes
+  |   "IOPCIAERCapabilities" = 0
+  |   "function-dart_self" = <53000000666c6553>
+  |   "pcidebug" = "0:0:0(1:1)"
+  |   "IOPCIExpressCapabilities" = 66
+  |   "IOPCIPowerManagementCapabilities" = 18446744072799604737
+  |   "IOPowerManagement" = {"ChildrenPowerState"=2,"DevicePowerState"=0,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+  |   "pcie-rc-gen3-shadow-tunables" = <54010000040000000f0f0000000000000404000000000000900800000400000000000003000000000000000000000000a80800000400000000ffff00000000000010000000000000>
+  |   "IOPCIExpressDeviceCapabilities" = 32769
+  |   "vendor-id" = <6b100000>
+  |   "#address-cells" = <03000000>
+  | }
+  | 
+  +-o wlan@0  <class IOPCIDevice, id 0x10000082b, registered, matched, active, busy 0 (1908 ms), retain 20>
+  |   {
+  |     "IOPCIExpressLinkCapabilities2" = 6
+  |     "IOPCIDeviceMapperPageSize" = 16384
+  |     "assigned-addresses" = <100001820000c0c000000000000001000000000018000182000000c0000000000000800000000000>
+  |     "vendor-id" = <e4140000>
+  |     "class-code" = <00800200>
+  |     "subsystem-vendor-id" = <6b100000>
+  |     "IOPCIExpressLinkCapabilities" = 4651026
+  |     "IOPCIDeviceMemoryMapBase" = 6092
+  |     "IOName" = "pci14e4,4425"
+  |     "IOInterruptSpecifiers" = (<c102000000000100>)
+  |     "#size-cells" = <00000000>
+  |     "IOPCIMSIMode" = Yes
+  |     "iommu-parent" = <54000000>
+  |     "pcidebug" = "1:0:0"
+  |     "IOChildIndex" = 1
+  |     "IOPCIExpressLinkStatus" = 4114
+  |     "IOPCIDeviceMemoryMapSize" = 190451
+  |     "pci-aspm-default" = 2
+  |     "IOPCIExpressCapabilities" = 2
+  |     "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=72},{"capability"="MSICapability","offset"=88},{"capability"="VendorSpecificCapability","offset"=104},{"capability"="PCIExpressCapability","offset"=172},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="DeviceSerialNumberCapability","offset"=316},{"capability"="PowerBudgetCapability","offset"=336},{"capability"="VirtualChannelCapability","offset"=352},{"capability"="LatencyToleranceReportingCapability","offset"=432},{"capability"="ResizableBAR","offset"=544},{"capability"="L1PMSubstatesCapability","offset"=576})
+  |     "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+  |     "pci-max-latency" = <08100810>
+  |     "IOInterruptControllers" = ("ApplePCIEMSIController-apcie")
+  |     "built-in" = <00000000>
+  |     "IOPCIResourced" = Yes
+  |     "IOPowerManagement" = {"ChildrenPowerState"=2,"DevicePowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+  |     "IODeviceMemory" = (({"address"=29003612160,"length"=65536}),({"address"=28991029248,"length"=8388608}))
+  |     "AAPL,phandle" = <51000000>
+  |     "IOPCIMSIMessageControl" = 138
+  |     "name" = <"wlan">
+  |     "subsystem-id" = <78430000>
+  |     "IOPCIL1PMCapabilities" = 1574943
+  |     "IODEXTMatchCount" = 1
+  |     "device_type" = <"pcie-device">
+  |     "compatible" = <"wlan-pcie,bcm4378","wlan-pcie,bcm">
+  |     "IOPCIExpressDeviceCapabilities2" = 526367
+  |     "IOPMResetPowerStateOnWake" = Yes
+  |     "IOPCIExpressDeviceCapabilities" = 268472194
+  |     "IOPCIDeviceDeviceTreeEntry" = "IOService is not serializable"
+  |     "reg" = <000001000000000000000000000000000000000010000102000000000000000000000100000000001800010200000000000000000000800000000000>
+  |     "IOPCIPowerManagementCapabilities" = 18446744073676216321
+  |     "device-id" = <25440000>
+  |     "#address-cells" = <01000000>
+  |     "pci-l1pm-control" = <0f00554000000000>
+  |     "revision-id" = <03000000>
+  |     "IOPCIAERCapabilities" = 160
+  |   }
+  |   
+  +-o bluetooth-pcie@0,1  <class IOPCIDevice, id 0x10000082c, registered, matched, active, busy 0 (1 ms), retain 16>
+      {
+        "IOPCIDeviceMapperPageSize" = 16384
+        "IOInterruptSpecifiers" = (<c002000000000100>)
+        "assigned-addresses" = <100101820000c1c000000000008000000000000018010182000080c0000000000000400000000000>
+        "vendor-id" = <e4140000>
+        "class-code" = <00800200>
+        "subsystem-vendor-id" = <6b100000>
+        "IOPCIExpressLinkCapabilities" = 4642834
+        "IOPCIDeviceMemoryMapBase" = 6092
+        "IOName" = "pci14e4,5f69"
+        "IOPCIMSIMode" = Yes
+        "#size-cells" = <00000000>
+        "iommu-parent" = <55000000>
+        "pcidebug" = "1:0:1"
+        "IOChildIndex" = 2
+        "IOPCIExpressLinkStatus" = 4114
+        "IOPCIDeviceMemoryMapSize" = 190451
+        "pci-aspm-default" = 2
+        "IOPCIExpressCapabilities" = 2
+        "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=72},{"capability"="MSICapability","offset"=88},{"capability"="VendorSpecificCapability","offset"=104},{"capability"="PCIExpressCapability","offset"=172},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="DeviceSerialNumberCapability","offset"=316},{"capability"="PowerBudgetCapability","offset"=336},{"capability"="VirtualChannelCapability","offset"=352},{"capability"="ResizableBAR","offset"=544})
+        "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+        "pci-max-latency" = <08100810>
+        "IOInterruptControllers" = ("ApplePCIEMSIController-apcie")
+        "built-in" = <00000000>
+        "IOPCIResourced" = Yes
+        "IOPowerManagement" = {"ChildrenPowerState"=2,"DevicePowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+        "IODeviceMemory" = (({"address"=29003677696,"length"=32768}),({"address"=28999417856,"length"=4194304}))
+        "AAPL,phandle" = <52000000>
+        "IOPCIMSIMessageControl" = 138
+        "name" = <"bluetooth-pcie">
+        "subsystem-id" = <78430000>
+        "device_type" = <"pcie-device">
+        "compatible" = <"wlan-pcie,bcm4378","wlan-pcie,bcm">
+        "IOPCIExpressDeviceCapabilities2" = 526367
+        "IOPMResetPowerStateOnWake" = Yes
+        "IOPCIExpressDeviceCapabilities" = 268472194
+        "IOReportLegendPublic" = Yes
+        "IOPCIDeviceDeviceTreeEntry" = "IOService is not serializable"
+        "reg" = <000101000000000000000000000000000000000010010102000000000000000000800000000000001801010200000000000000000000400000000000>
+        "IOPCIPowerManagementCapabilities" = 18446744073676216321
+        "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="bluetooth-pcie 0"})
+        "device-id" = <695f0000>
+        "#address-cells" = <01000000>
+        "revision-id" = <03000000>
+        "IOPCIAERCapabilities" = 160
+        "IOPCIExpressLinkCapabilities2" = 6
+      }
+      
+
++-o pcic0-bridge@0  <class IOPCIDevice, id 0x100000727, registered, matched, active, busy 0 (3 ms), retain 12>
+    {
+      "#msi-vectors" = <20000000>
+      "IOPCIExpressDeviceCapabilities2" = 3103
+      "IOInterruptControllers" = ("APCIECMSIController-apciec0")
+      "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=64},{"capability"="MSICapability","offset"=80},{"capability"="PCIExpressCapability","offset"=112},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="VSEC","offset"=336},{"capability"="PrecisionTimeManagementCapability","offset"=592},{"capability"="VSEC","offset"=604})
+      "AAPL,slot-name" = <536c6f742d300000>
+      "IOPCIMSIMessageControl" = 128
+      "AppleEmbeddedPCIEPort" = "AppleT8103PCIeCPort is not serializable"
+      "reg" = <0000000000000000000000000000000000000000>
+      "function-dart_release_sid" = <580000006c655253>
+      "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="pcic0-bridge 0"})
+      "IOPCIExpressRootCapabilities" = 1
+      "default-apcie-options" = <01001080>
+      "IOName" = "pci-bridge"
+      "function-dart_request_sid" = <5800000071655253>
+      "IOPCIExpressLinkCapabilities" = 7551233
+      "IOPCIPTMCapabilities" = 4102
+      "#size-cells" = <02000000>
+      "function-dart_force_active" = <5800000074636146>
+      "ranges" = <0000008200000080000000000000008200000080000000000000004000000000000000c2000000c000000000000000c2000000c0000000000000f03f000000000000008100000000000000000000008100000000000000000000000000000000>
+      "marvel-wa-viddids" = <4b1b20914b1b23914b1b28914b1b30914b1b72914b1b7a914b1b82914b1ba0914b1b20924b1b3092281c22017b1992230311450603114206340030084b1b35924b1b7191>
+      "IOPCIOnline" = Yes
+      "IODTPersist" = 0
+      "class-code" = <00040600>
+      "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+      "IOPCIResourced" = Yes
+      "name" = <"pcic0-bridge">
+      "IOInterruptSpecifiers" = (<e202000000000100>)
+      "AAPL,phandle" = <57000000>
+      "PCI-Thunderbolt" = <>
+      "msi-vector-base" = <00000000>
+      "IOPCIExpressLinkCapabilities2" = 2
+      "compatible" = <"pciec-bridge">
+      "revision-id" = <00000000>
+      "IOReportLegendPublic" = Yes
+      "IOPCIMSIMode" = Yes
+      "Thunderbolt Path" = "IOService:/AppleARMPE/arm-io@10F00000/AppleT810xIO/acio0@81F00000/AppleThunderboltHALType5/AppleThunderboltNHIType5/IOThunderboltControllerType5/IOThunderboltPort@7/IOThunderboltSwitchType5/IOThunderboltPort@3"
+      "pci-ignore-linkstatus" = <>
+      "device-id" = <10100000>
+      "IOPCITunnelLinkChange" = <>
+      "IOPCIExpressLinkStatus" = 65535
+      "device-protection-granularity" = <d8120f4000010000>
+      "IOPCIDeviceDeviceTreeEntry" = "IOService is not serializable"
+      "IOPCIConfigured" = Yes
+      "IOPCIAERCapabilities" = 512
+      "Thunderbolt Entry ID" = 4294969120
+      "function-dart_self" = <58000000666c6553>
+      "pcidebug" = "0:0:0(1:128)"
+      "IOPCIExpressCapabilities" = 66
+      "IOPCIHPType" = 49
+      "IOPCIPowerManagementCapabilities" = 18446744072799604737
+      "IOPowerManagement" = {"ChildrenPowerState"=0,"CurrentPowerState"=0,"CapabilityFlags"=0,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+      "IOPCIExpressDeviceCapabilities" = 32768
+      "vendor-id" = <6b100000>
+      "#address-cells" = <03000000>
+      "msi-for-bridges" = <>
+    }
+    
+
++-o pcic1-bridge@0  <class IOPCIDevice, id 0x10000077d, registered, matched, active, busy 0 (573 ms), retain 14>
+  | {
+  |   "#msi-vectors" = <20000000>
+  |   "IOPCIExpressDeviceCapabilities2" = 3103
+  |   "IOInterruptControllers" = ("APCIECMSIController-apciec1")
+  |   "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=64},{"capability"="MSICapability","offset"=80},{"capability"="PCIExpressCapability","offset"=112},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="VSEC","offset"=336},{"capability"="PrecisionTimeManagementCapability","offset"=592},{"capability"="VSEC","offset"=604})
+  |   "AAPL,slot-name" = <536c6f742d310000>
+  |   "IOPCIMSIMessageControl" = 128
+  |   "AppleEmbeddedPCIEPort" = "AppleT8103PCIeCPort is not serializable"
+  |   "reg" = <0000000000000000000000000000000000000000>
+  |   "function-dart_release_sid" = <620000006c655253>
+  |   "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="pcic1-bridge 0"})
+  |   "IOPCIExpressRootCapabilities" = 1
+  |   "default-apcie-options" = <01001080>
+  |   "IOName" = "pci-bridge"
+  |   "function-dart_request_sid" = <6200000071655253>
+  |   "IOPCIExpressLinkCapabilities" = 7551233
+  |   "IOPCIPTMCapabilities" = 4102
+  |   "#size-cells" = <02000000>
+  |   "function-dart_force_active" = <6200000074636146>
+  |   "ranges" = <0000008200001000000000000000008200001000000000000000f03f00000000000000c20000004000000000000000c2000000400000000000000040000000000000008100000000000000000000008100000000000000000000000000000000>
+  |   "marvel-wa-viddids" = <4b1b20914b1b23914b1b28914b1b30914b1b72914b1b7a914b1b82914b1ba0914b1b20924b1b3092281c22017b1992230311450603114206340030084b1b35924b1b7191>
+  |   "IOPCIOnline" = Yes
+  |   "IODTPersist" = 0
+  |   "class-code" = <00040600>
+  |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+  |   "IOPCIResourced" = Yes
+  |   "name" = <"pcic1-bridge">
+  |   "IOInterruptSpecifiers" = (<3203000000000100>)
+  |   "AAPL,phandle" = <61000000>
+  |   "PCI-Thunderbolt" = <>
+  |   "msi-vector-base" = <00000000>
+  |   "IOPCIExpressLinkCapabilities2" = 2
+  |   "compatible" = <"pciec-bridge">
+  |   "revision-id" = <00000000>
+  |   "IOReportLegendPublic" = Yes
+  |   "IOPCIMSIMode" = Yes
+  |   "Thunderbolt Path" = "IOService:/AppleARMPE/arm-io@10F00000/AppleT810xIO/acio1@1F00000/AppleThunderboltHALType5/AppleThunderboltNHIType5/IOThunderboltControllerType5/IOThunderboltPort@7/IOThunderboltSwitchType5/IOThunderboltPort@3"
+  |   "pci-ignore-linkstatus" = <>
+  |   "device-id" = <10100000>
+  |   "IOPCITunnelLinkChange" = <>
+  |   "IOPCIExpressLinkStatus" = 12545
+  |   "device-protection-granularity" = <d8120f4000010000>
+  |   "IOPCIDeviceDeviceTreeEntry" = "IOService is not serializable"
+  |   "IOPCIConfigured" = Yes
+  |   "IOPCIAERCapabilities" = 512
+  |   "Thunderbolt Entry ID" = 4294969210
+  |   "function-dart_self" = <62000000666c6553>
+  |   "pcidebug" = "0:0:0(1:128)"
+  |   "IOPCIExpressCapabilities" = 66
+  |   "IOPCIHPType" = 49
+  |   "IOPCIPowerManagementCapabilities" = 18446744072799604737
+  |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+  |   "IOPCIExpressDeviceCapabilities" = 32768
+  |   "vendor-id" = <6b100000>
+  |   "#address-cells" = <03000000>
+  |   "msi-for-bridges" = <>
+  |   "PCI-Thunderbolt-Legacy" = Yes
+  | }
+  | 
+  +-o pci-bridge@0  <class IOPCIDevice, id 0x10000554f, registered, matched, active, busy 0 (89 ms), retain 14>
+    | {
+    |   "IOPCIExpressLinkCapabilities" = 4545601
+    |   "vendor-id" = <86800000>
+    |   "class-code" = <00040600>
+    |   "Tunnel Endpoint Device Vendor ID" = <08000000>
+    |   "IOName" = "pci-bridge"
+    |   "#size-cells" = <02000000>
+    |   "IOPCIHPType" = 48
+    |   "pcidebug" = "1:0:0(2:128)"
+    |   "IOChildIndex" = 1
+    |   "Thunderbolt Path" = "IOService:/AppleARMPE/arm-io@10F00000/AppleT810xIO/acio1@1F00000/AppleThunderboltHALType5/AppleThunderboltNHIType5/IOThunderboltControllerType5/IOThunderboltPort@7/IOThunderboltSwitchType5/IOThunderboltPort@1/IOThunderboltPort@3/IOThunderboltSwitchType3/IOThunderboltPort@6"
+    |   "IOPCIExpressLinkStatus" = 4161
+    |   "IOPCIExpressCapabilities" = 82
+    |   "IODTPersist" = 0
+    |   "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=128},{"capability"="MSICapability","offset"=136},{"capability"="PCIExpressCapability","offset"=192},{"capability"="DeviceSerialNumberCapability","offset"=256},{"capability"="ErrorReportingCapability","offset"=512},{"capability"="VirtualChannelCapability","offset"=768},{"capability"="PowerBudgetCapability","offset"=1024},{"capability"="VSEC","offset"=1280},{"capability"="LatencyToleranceReportingCapability","offset"=1536},{"capability"="SPCIe","offset"=1792})
+    |   "IOPCIConfigured" = Yes
+    |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+    |   "Thunderbolt Entry ID" = 4294989110
+    |   "IOPCIResourced" = Yes
+    |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+    |   "ranges" = <0000008200001000000000000000008200001000000000000000f03f00000000000000c20000004000000000000000c2000000400000000000000040000000000000008100000000000000000000008100000000000000000010000000000000>
+    |   "Tunnel Endpoint GUID" = <00412240d0dd0800>
+    |   "IOPCIMSIMessageControl" = 128
+    |   "name" = <"pci-bridge">
+    |   "compatible" = <"pci8086,15d3","pciclass,060400">
+    |   "IOPCIExpressDeviceCapabilities2" = 2048
+    |   "Tunnel Endpoint Device Model ID" = <4a000000>
+    |   "IOPCIExpressDeviceCapabilities" = 32800
+    |   "reg" = <0000010000000000000000000000000000000000>
+    |   "IOPCIPowerManagementCapabilities" = 18446744073705588737
+    |   "IOPCITunnelL1Enable" = No
+    |   "device-id" = <d3150000>
+    |   "#address-cells" = <03000000>
+    |   "revision-id" = <02000000>
+    |   "IOPCIAERCapabilities" = 0
+    |   "IOPCIExpressLinkCapabilities2" = 14
+    | }
+    | 
+    +-o pci-bridge@1  <class IOPCIDevice, id 0x100005550, registered, matched, active, busy 0 (82 ms), retain 13>
+      | {
+      |   "IOPCIExpressLinkCapabilities" = 24206403
+      |   "vendor-id" = <86800000>
+      |   "class-code" = <00040600>
+      |   "IOName" = "pci-bridge"
+      |   "#size-cells" = <02000000>
+      |   "IOPCITunnelled" = Yes
+      |   "IOPCIExpressSlotCapabilities" = 262144
+      |   "IOPCIHPType" = 48
+      |   "pcidebug" = "2:1:0(3:128)"
+      |   "IOChildIndex" = 1
+      |   "IOPCIExpressLinkStatus" = 12355
+      |   "IOPCIExpressCapabilities" = 354
+      |   "IODTPersist" = 0
+      |   "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=128},{"capability"="MSICapability","offset"=136},{"capability"="PCIExpressCapability","offset"=192},{"capability"="DeviceSerialNumberCapability","offset"=256},{"capability"="ErrorReportingCapability","offset"=512},{"capability"="VirtualChannelCapability","offset"=768},{"capability"="PowerBudgetCapability","offset"=1024},{"capability"="VSEC","offset"=1280},{"capability"="SPCIe","offset"=1792})
+      |   "IOPCIConfigured" = Yes
+      |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+      |   "IOPCIResourced" = Yes
+      |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+      |   "ranges" = <0000008200001000000000000000008200001000000000000000f03f00000000000000c20000004000000000000000c2000000400000000000000040000000000000008100000000000000000000008100000000000000000010000000000000>
+      |   "IOPCIMSIMessageControl" = 128
+      |   "name" = <"pci-bridge">
+      |   "IOPCIExpressSlotCapabilities2" = 0
+      |   "compatible" = <"pci8086,15d3","pciclass,060400">
+      |   "IOPCIExpressDeviceCapabilities2" = 2048
+      |   "IOPCIExpressDeviceCapabilities" = 32800
+      |   "IOPCIExpressSlotStatus" = 328
+      |   "reg" = <0008020000000000000000000000000000000000>
+      |   "IOPCIPowerManagementCapabilities" = 18446744073705588737
+      |   "IOPCITunnelL1Enable" = No
+      |   "device-id" = <d3150000>
+      |   "#address-cells" = <03000000>
+      |   "revision-id" = <02000000>
+      |   "IOPCIAERCapabilities" = 0
+      |   "IOPCIExpressLinkCapabilities2" = 14
+      | }
+      | 
+      +-o pci-bridge@0  <class IOPCIDevice, id 0x100005551, registered, matched, active, busy 0 (77 ms), retain 14>
+        | {
+        |   "IOPCIExpressDeviceCapabilities2" = 65536
+        |   "#address-cells" = <03000000>
+        |   "class-code" = <00040600>
+        |   "IOPCITunnelled" = Yes
+        |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+        |   "IOPCIPowerManagementCapabilities" = 18446744071591624705
+        |   "Capability Offsets" = ({"capability"="PCIExpressCapability","offset"=96},{"capability"="MSICapability","offset"=224},{"capability"="PowerManagementCapability","offset"=64},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="SPCIe","offset"=448},{"capability"="LaneMarginingRx","offset"=800},{"capability"="PL16GTs","offset"=880})
+        |   "IOPCIHPType" = 48
+        |   "vendor-id" = <b3150000>
+        |   "name" = <"pci-bridge">
+        |   "device-id" = <74190000>
+        |   "IOPCIMSIMessageControl" = 132
+        |   "IOChildIndex" = 1
+        |   "IOPCIAERCapabilities" = 164
+        |   "compatible" = <"pci15b3,1974","pciclass,060400">
+        |   "ranges" = <0000008200000002000000000000008200000002000000000000100400000000000000c20000004000000000000000c200000040000000000000002a000000000000008100000000000000000000008100000000000000000010000000000000>
+        |   "IOPCIExpressLinkCapabilities" = 4288644
+        |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+        |   "IOPCIResourced" = Yes
+        |   "IOPCIConfigured" = Yes
+        |   "IOPCIExpressLinkCapabilities2" = 30
+        |   "IODTPersist" = 0
+        |   "IOPCITunnelL1Enable" = No
+        |   "revision-id" = <00000000>
+        |   "IOPCIExpressLinkStatus" = 4163
+        |   "IOPCIExpressCapabilities" = 82
+        |   "pcidebug" = "3:0:0(4:67)"
+        |   "IOName" = "pci-bridge"
+        |   "#size-cells" = <02000000>
+        |   "reg" = <0000030000000000000000000000000000000000>
+        |   "IOPCIExpressDeviceCapabilities" = 32770
+        | }
+        | 
+        +-o pci-bridge@8  <class IOPCIDevice, id 0x100005552, registered, matched, active, busy 0 (60 ms), retain 14>
+        | | {
+        | |   "IOInterruptSpecifiers" = (<3403000000000100>)
+        | |   "IOPCIMSIMode" = Yes
+        | |   "IOPCIExpressLinkCapabilities" = 140079236
+        | |   "vendor-id" = <b3150000>
+        | |   "class-code" = <00040600>
+        | |   "IOName" = "pci-bridge"
+        | |   "#size-cells" = <02000000>
+        | |   "IOPCITunnelled" = Yes
+        | |   "IOPCIHPType" = 48
+        | |   "pcidebug" = "4:8:0(67:67)"
+        | |   "IOChildIndex" = 1
+        | |   "IOPCIExpressLinkStatus" = 12419
+        | |   "IOPCIExpressCapabilities" = 98
+        | |   "IODTPersist" = 0
+        | |   "Capability Offsets" = ({"capability"="PCIExpressCapability","offset"=96},{"capability"="MSICapability","offset"=224},{"capability"="PowerManagementCapability","offset"=64},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="SPCIe","offset"=448},{"capability"="AccessControlServicesCapability","offset"=560},{"capability"="LaneMarginingRx","offset"=800},{"capability"="PL16GTs","offset"=880})
+        | |   "IOPCIConfigured" = Yes
+        | |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+        | |   "IOInterruptControllers" = ("APCIECMSIController-apciec1")
+        | |   "IOPCIResourced" = Yes
+        | |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+        | |   "ranges" = <0000008200000002000000000000008200000002000000000000100400000000000000c20000004000000000000000c2000000400000000000000010000000000000008100000000000000000000008100000000000000000000000000000000>
+        | |   "IOPCIMSIMessageControl" = 132
+        | |   "name" = <"pci-bridge">
+        | |   "IOPCIACSCapabilities" = 4479
+        | |   "IOPCITunnelLinkChange" = Yes
+        | |   "compatible" = <"pci15b3,1974","pciclass,060400">
+        | |   "IOPCIExpressDeviceCapabilities2" = 65568
+        | |   "IOPCIExpressDeviceCapabilities" = 32770
+        | |   "IOReportLegendPublic" = Yes
+        | |   "reg" = <0040040000000000000000000000000000000000>
+        | |   "IOPCIPowerManagementCapabilities" = 18446744071591624705
+        | |   "IOPCIOnline" = Yes
+        | |   "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="pci-bridge 0"})
+        | |   "device-id" = <74190000>
+        | |   "IOPCITunnelL1Enable" = No
+        | |   "#address-cells" = <03000000>
+        | |   "revision-id" = <00000000>
+        | |   "IOPCIAERCapabilities" = 160
+        | |   "IOPCIExpressLinkCapabilities2" = 30
+        | | }
+        | | 
+        | +-o pci10ee,788f@0  <class IOPCIDevice, id 0x100005554, registered, matched, active, busy 0 (37 ms), retain 16>
+        | |   {
+        | |     "IOPCIDeviceMapperPageSize" = 16384
+        | |     "assigned-addresses" = <10004382000000040000000000000002000000001400438200000106000000000010000000000000>
+        | |     "vendor-id" = <ee100000>
+        | |     "class-code" = <00001200>
+        | |     "subsystem-vendor-id" = <ee100000>
+        | |     "IOPCIExpressLinkCapabilities" = 4452483
+        | |     "IOPCIDeviceMemoryMapBase" = 0
+        | |     "IOName" = "pci10ee,788f"
+        | |     "IOPCITunnelled" = Yes
+        | |     "IOPCIHPType" = 48
+        | |     "pcidebug" = "67:0:0"
+        | |     "IOPCIMSIXMessageControl" = 30863
+        | |     "IOChildIndex" = 1
+        | |     "IOPCIExpressLinkStatus" = 4227
+        | |     "IOPCITunnelRootDeviceModelID" = <4a000000>
+        | |     "iommu-parent" = "IODARTMapper is not serializable"
+        | |     "IOPCIExpressCapabilities" = 2
+        | |     "IOPCIDeviceMemoryMapSize" = 262143
+        | |     "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=64},{"capability"="MSIXCapability","offset"=96},{"capability"="PCIExpressCapability","offset"=112},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="SPCIe","offset"=448},{"capability"="ResizableBAR","offset"=1040})
+        | |     "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+        | |     "IOPCIResourced" = Yes
+        | |     "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+        | |     "IODeviceMemory" = (({"address"=25836912640,"length"=33554432}),({"address"=25870532608,"length"=4096}))
+        | |     "IOPCITunnelRootDeviceVendorID" = <08000000>
+        | |     "name" = <"pci10ee,788f">
+        | |     "subsystem-id" = <51430000>
+        | |     "IODEXTMatchCount" = 1
+        | |     "compatible" = <"pci10ee,4351","pci10ee,788f","pciclass,120000">
+        | |     "IOPCIExpressDeviceCapabilities2" = 22
+        | |     "IOPCIExpressDeviceCapabilities" = 32771
+        | |     "reg" = <000043000000000000000000000000000000000010004302000000000000000000000002000000001400430200000000000000000010000000000000>
+        | |     "IOPCIPowerManagementCapabilities" = 221185
+        | |     "IOPCITunnelL1Enable" = No
+        | |     "device-id" = <8f780000>
+        | |     "revision-id" = <00000000>
+        | |     "IOPCIAERCapabilities" = 0
+        | |     "IOPCIExpressLinkCapabilities2" = 14
+        | |   }
+        | |   
+        | +-o pci10ee,6a90@0,1  <class IOPCIDevice, id 0x100005555, registered, matched, active, busy 0 (35 ms), retain 20>
+        |     {
+        |       "IOPCIDeviceMapperPageSize" = 16384
+        |       "IOPCIMSIMode" = Yes
+        |       "assigned-addresses" = <10014382000000020000000000000002000000001801438200000006000000000000010000000000200143c200000040000000000000001000000000>
+        |       "vendor-id" = <ee100000>
+        |       "class-code" = <00001200>
+        |       "subsystem-vendor-id" = <ee100000>
+        |       "IOPCIExpressLinkCapabilities" = 4452483
+        |       "IOPCIDeviceMemoryMapBase" = 0
+        |       "IOName" = "pci10ee,6a90"
+        |       "IOPCITunnelled" = Yes
+        |       "IOPCIHPType" = 48
+        |       "pcidebug" = "67:0:1"
+        |       "IOPCIMSIXMessageControl" = 27280
+        |       "IOChildIndex" = 2
+        |       "IOPCIExpressLinkStatus" = 4227
+        |       "IOPCITunnelRootDeviceModelID" = <4a000000>
+        |       "iommu-parent" = "IODARTMapper is not serializable"
+        |       "IOPCIExpressCapabilities" = 2
+        |       "IOPCIDeviceMemoryMapSize" = 262143
+        |       "Capability Offsets" = ({"capability"="PowerManagementCapability","offset"=64},{"capability"="MSIXCapability","offset"=96},{"capability"="PCIExpressCapability","offset"=112},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="ResizableBAR","offset"=1040})
+        |       "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+        |       "IOInterruptControllers" = ("APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1")
+        |       "IOPCIResourced" = Yes
+        |       "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+        |       "IODeviceMemory" = (({"address"=25803358208,"length"=33554432}),({"address"=25870467072,"length"=65536}),({"address"=26843545600,"length"=268435456}))
+        |       "IOPCITunnelRootDeviceVendorID" = <08000000>
+        |       "name" = <"pci10ee,6a90">
+        |       "subsystem-id" = <51430000>
+        |       "IODEXTMatchCount" = 1
+        |       "compatible" = <"pci10ee,4351","pci10ee,6a90","pciclass,120000">
+        |       "IOPCIExpressDeviceCapabilities2" = 22
+        |       "IOPCIExpressDeviceCapabilities" = 32771
+        |       "reg" = <0001430000000000000000000000000000000000100143020000000000000000000000020000000018014302000000000000000000000100000000002001434200000000000000000000001000000000>
+        |       "IOPCIPowerManagementCapabilities" = 221185
+        |       "IOPCITunnelL1Enable" = No
+        |       "device-id" = <906a0000>
+        |       "revision-id" = <00000000>
+        |       "IOPCIAERCapabilities" = 0
+        |       "IOPCIExpressLinkCapabilities2" = 14
+        |       "IOInterruptSpecifiers" = (<3e03000000000300>,<3f03000000000300>,<4003000000000300>,<4103000000000300>)
+        |     }
+        |     
+        +-o pci-bridge@10  <class IOPCIDevice, id 0x100005553, registered, matched, active, busy 0 (61 ms), retain 14>
+          | {
+          |   "IOInterruptSpecifiers" = (<3303000000000100>)
+          |   "IOPCIMSIMode" = Yes
+          |   "IOPCIExpressLinkCapabilities" = 274297092
+          |   "vendor-id" = <b3150000>
+          |   "class-code" = <00040600>
+          |   "IOName" = "pci-bridge"
+          |   "#size-cells" = <02000000>
+          |   "IOPCITunnelled" = Yes
+          |   "IOPCIHPType" = 48
+          |   "pcidebug" = "4:16:0(5:5)"
+          |   "IOChildIndex" = 2
+          |   "IOPCIExpressLinkStatus" = 12548
+          |   "IOPCIExpressCapabilities" = 98
+          |   "IODTPersist" = 0
+          |   "Capability Offsets" = ({"capability"="PCIExpressCapability","offset"=96},{"capability"="MSICapability","offset"=224},{"capability"="PowerManagementCapability","offset"=64},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="SPCIe","offset"=448},{"capability"="AccessControlServicesCapability","offset"=560},{"capability"="LaneMarginingRx","offset"=800},{"capability"="PL16GTs","offset"=880})
+          |   "IOPCIConfigured" = Yes
+          |   "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci","com.apple.developer.driverkit.transport.pci.bridge"))
+          |   "IOInterruptControllers" = ("APCIECMSIController-apciec1")
+          |   "IOPCIResourced" = Yes
+          |   "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+          |   "ranges" = <0000008200000000000000000000008200000000000000000000000000000000000000c20000006600000000000000c2000000660000000000000004000000000000008100000000000000000000008100000000000000000000000000000000>
+          |   "IOPCIMSIMessageControl" = 132
+          |   "name" = <"pci-bridge">
+          |   "IOPCIACSCapabilities" = 4479
+          |   "IOPCITunnelLinkChange" = Yes
+          |   "compatible" = <"pci15b3,1974","pciclass,060400">
+          |   "IOPCIExpressDeviceCapabilities2" = 65568
+          |   "IOPCIExpressDeviceCapabilities" = 32770
+          |   "IOReportLegendPublic" = Yes
+          |   "reg" = <0080040000000000000000000000000000000000>
+          |   "IOPCIPowerManagementCapabilities" = 18446744071591624705
+          |   "IOPCIOnline" = Yes
+          |   "IOReportLegend" = ({"IOReportGroupName"="Interrupt Statistics (by index)","IOReportChannels"=((5291294645182005248,4295098369,"               First Level Interrupt Handler Count"),(5291294645182005249,4295098369,"              Second Level Interrupt Handler Count"),(5291294645182005250,4295098369,"        First Level Interrupt Handler Time (MATUs)"),(5291294645182005251,4295098369,"   Second Level Interrupt Handler CPU Time (MATUs)"),(5291294645182005252,4295098369,"Second Level Interrupt Handler System Time (MATUs)")),"IOReportChannelInfo"={"IOReportChannelUnit"=0},"IOReportSubGroupName"="pci-bridge 0"})
+          |   "device-id" = <74190000>
+          |   "IOPCITunnelL1Enable" = No
+          |   "#address-cells" = <03000000>
+          |   "revision-id" = <00000000>
+          |   "IOPCIAERCapabilities" = 164
+          |   "IOPCIExpressLinkCapabilities2" = 30
+          | }
+          | 
+          +-o ethernet@0  <class IOPCIDevice, id 0x100005556, registered, matched, active, busy 0 (48 ms), retain 25>
+          |   {
+          |     "IOPCIDeviceMapperPageSize" = 16384
+          |     "IOPCIMSIMode" = Yes
+          |     "assigned-addresses" = <100005c200000068000000000000000200000000>
+          |     "vendor-id" = <b3150000>
+          |     "class-code" = <00000200>
+          |     "subsystem-vendor-id" = <b3150000>
+          |     "IOPCIExpressLinkCapabilities" = 4288772
+          |     "IOPCIDeviceMemoryMapBase" = 0
+          |     "IOName" = "ethernet"
+          |     "IOPCITunnelled" = Yes
+          |     "IOPCIHPType" = 48
+          |     "pcidebug" = "5:0:0"
+          |     "IOPCIMSIXMessageControl" = 4119
+          |     "IOChildIndex" = 1
+          |     "IOPCIExpressLinkStatus" = 4356
+          |     "IOPCITunnelRootDeviceModelID" = <4a000000>
+          |     "iommu-parent" = "IODARTMapper is not serializable"
+          |     "IOPCIExpressCapabilities" = 2
+          |     "IOPCIDeviceMemoryMapSize" = 262143
+          |     "Capability Offsets" = ({"capability"="PCIExpressCapability","offset"=96},{"capability"="VitalProductDataCapability","offset"=72},{"capability"="MSIXCapability","offset"=156},{"capability"="VendorSpecificCapability","offset"=192},{"capability"="PowerManagementCapability","offset"=64},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="AlternativeRoutingID","offset"=336},{"capability"="SRIOV","offset"=384},{"capability"="SPCIe","offset"=448},{"capability"="AccessControlServicesCapability","offset"=560},{"capability"="LaneMarginingRx","offset"=800},{"capability"="PL16GTs","offset"=880},{"capability"="DataLinkFeature","offset"=1056})
+          |     "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+          |     "IOInterruptControllers" = ("APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1")
+          |     "IOPCIResourced" = Yes
+          |     "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+          |     "IODeviceMemory" = (({"address"=27514634240,"length"=33554432}))
+          |     "IOPCITunnelRootDeviceVendorID" = <08000000>
+          |     "name" = <"ethernet">
+          |     "subsystem-id" = <46000000>
+          |     "IOPCIACSCapabilities" = 0
+          |     "IODEXTMatchCount" = 1
+          |     "compatible" = <"pci15b3,46","pci15b3,1017","pciclass,020000">
+          |     "IOPCIExpressDeviceCapabilities2" = 65559
+          |     "IOPCIExpressDeviceCapabilities" = 268472290
+          |     "reg" = <00000500000000000000000000000000000000001000054200000000000000000000000200000000>
+          |     "IOPCIPowerManagementCapabilities" = 18446744071591624705
+          |     "IOPCITunnelL1Enable" = No
+          |     "device-id" = <17100000>
+          |     "revision-id" = <00000000>
+          |     "IOPCIAERCapabilities" = 164
+          |     "IOPCIExpressLinkCapabilities2" = 25165854
+          |     "IOInterruptSpecifiers" = (<4603000000000300>,<4703000000000300>,<4803000000000300>,<4903000000000300>,<4a03000000000300>,<4b03000000000300>,<4c03000000000300>,<4d03000000000300>,<4e03000000000300>)
+          |   }
+          |   
+          +-o ethernet@0,1  <class IOPCIDevice, id 0x100005557, registered, matched, active, busy 0 (46 ms), retain 25>
+              {
+                "IOPCIDeviceMapperPageSize" = 16384
+                "IOPCIMSIMode" = Yes
+                "assigned-addresses" = <100105c200000066000000000000000200000000>
+                "vendor-id" = <b3150000>
+                "class-code" = <00000200>
+                "subsystem-vendor-id" = <b3150000>
+                "IOPCIExpressLinkCapabilities" = 4288772
+                "IOPCIDeviceMemoryMapBase" = 0
+                "IOName" = "ethernet"
+                "IOPCITunnelled" = Yes
+                "IOPCIHPType" = 48
+                "pcidebug" = "5:0:1"
+                "IOPCIMSIXMessageControl" = 4119
+                "IOChildIndex" = 2
+                "IOPCIExpressLinkStatus" = 4356
+                "IOPCITunnelRootDeviceModelID" = <4a000000>
+                "iommu-parent" = "IODARTMapper is not serializable"
+                "IOPCIExpressCapabilities" = 2
+                "IOPCIDeviceMemoryMapSize" = 262143
+                "Capability Offsets" = ({"capability"="PCIExpressCapability","offset"=96},{"capability"="VitalProductDataCapability","offset"=72},{"capability"="MSIXCapability","offset"=156},{"capability"="VendorSpecificCapability","offset"=192},{"capability"="PowerManagementCapability","offset"=64},{"capability"="ErrorReportingCapability","offset"=256},{"capability"="AlternativeRoutingID","offset"=336},{"capability"="SRIOV","offset"=384},{"capability"="AccessControlServicesCapability","offset"=560},{"capability"="DataLinkFeature","offset"=1056})
+                "IOServiceDEXTEntitlements" = (("com.apple.developer.driverkit.transport.pci"))
+                "IOInterruptControllers" = ("APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1","APCIECMSIController-apciec1")
+                "IOPCIResourced" = Yes
+                "IOPowerManagement" = {"ChildrenPowerState"=2,"CurrentPowerState"=2,"CapabilityFlags"=258,"ChildProxyPowerState"=2,"MaxPowerState"=3}
+                "IODeviceMemory" = (({"address"=27481079808,"length"=33554432}))
+                "IOPCITunnelRootDeviceVendorID" = <08000000>
+                "name" = <"ethernet">
+                "subsystem-id" = <46000000>
+                "IOPCIACSCapabilities" = 0
+                "IODEXTMatchCount" = 1
+                "compatible" = <"pci15b3,46","pci15b3,1017","pciclass,020000">
+                "IOPCIExpressDeviceCapabilities2" = 65559
+                "IOPCIExpressDeviceCapabilities" = 268472290
+                "reg" = <00010500000000000000000000000000000000001001054200000000000000000000000200000000>
+                "IOPCIPowerManagementCapabilities" = 18446744071591624705
+                "IOPCITunnelL1Enable" = No
+                "device-id" = <17100000>
+                "revision-id" = <00000000>
+                "IOPCIAERCapabilities" = 164
+                "IOPCIExpressLinkCapabilities2" = 25165854
+                "IOInterruptSpecifiers" = (<3503000000000300>,<3603000000000300>,<3703000000000300>,<3803000000000300>,<3903000000000300>,<3a03000000000300>,<3b03000000000300>,<3c03000000000300>,<3d03000000000300>)
+              }
+              
+

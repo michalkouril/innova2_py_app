@@ -1,3 +1,20 @@
+innova2-app (1.3.17) unstable; urgency=medium
+
+  * macOS (read-only): innova2-smi runs against the XRT macOS port's
+    DriverKit extension. New innova2_smi_macos.MacHost (picked on macOS):
+    topology/IDs/link state from the IOKit device tree, registers and PCI
+    config through the new macos/innova2_regio helper (built against the
+    port's dext ABI; refuses a mismatched ABI), feature ROM via the user
+    function. list, status, ddr, counters, check work on a route V r3 card
+    in a Thunderbolt eGFX box (M1, macOS 27). Register writes are refused
+    (the dext maps BARs read-only): recorder, ddr-mode, clear, throttle.
+  * status: the flight recorder section reports 'not available' instead of
+    failing when register writes are refused.
+  * check: on macOS the ConnectX-5 / boot-xsabin items are INFO
+    (platform.macos), not WARN/FAIL.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Fri, 09 Oct 2026 00:30:00 -0400
+
 innova2-app (1.3.16) unstable; urgency=medium
 
   * ddr-assess: the staged sequence (owner 2026-10-08) over a tester-image
