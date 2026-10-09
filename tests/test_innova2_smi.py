@@ -2734,6 +2734,12 @@ class _FakeRegio:
 
     def ask(self, req):
         f = req.split(); cmd = f[0]
+        if cmd == "uuid":                      # what the real dext answers before any xclbin load
+            return "ok " + "0" * 32
+        if cmd == "section":
+            return "err no such section (no xclbin loaded through this dext?)"
+        if cmd == "clock":
+            return "err clock %s: 0xe00002c7" % f[3]
         func, off = int(f[3], 16), int(f[-1] if cmd == "r" else f[5], 16) if cmd in ("r", "rb") else 0
         if cmd == "rb" and func == 1 and int(f[5], 16) == MAC.FEATURE_ROM:
             return "ok " + " ".join("%x" % w for w in self.rom[:int(f[6], 16)])
@@ -2781,6 +2787,26 @@ class MacHostTests(unittest.TestCase):
         rc, o, e = run_cli(h, ["check"])
         self.assertNotIn("FAIL", o)
         self.assertNotIn("platform.no_xsabin", run_cli(h, ["check", "-v"])[1])
+
+    def test_memory_from_dext_sections(self):
+        """the real sections the dext kept after loading the hpz440 profile verify xclbin on the Mac (2026-10-09)"""
+        h, model = self.mac()
+        lines = open(os.path.join(_FIX, "regio_sections_verify_prog.txt")).read().splitlines()
+        fake = h.regio_helper()
+        orig = fake.ask
+        def ask(req):
+            f = req.split()
+            if f[0] == "uuid":
+                return lines[0]
+            if f[0] == "section":
+                return lines[1 + int(f[3], 16)]
+            return orig(req)
+        fake.ask = ask
+        model.rv.update(kept=True, cal=True)
+        o = run_cli(h, ["memory"])[1]
+        self.assertIn("xclbin  : 900012f5-ca2c-adaf-4bef-a07734976322", o)
+        self.assertIn("used    : bank0 KEPT", o)
+        self.assertIn("4 GB", run_cli(h, ["memory", "-v"])[1])
 
     def test_writes_refused(self):
         h, model = self.mac()

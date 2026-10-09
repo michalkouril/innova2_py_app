@@ -10,6 +10,10 @@
 //   r   <bus> <dev> <func> <bar> <off>          -> "ok <value>"           (32-bit read; hex numbers)
 //   rb  <bus> <dev> <func> <bar> <off> <n>      -> "ok <v0> <v1> ..."     (n consecutive 32-bit reads)
 //   cfg <bus> <dev> <func> <off>                -> "ok <value>"           (PCI configuration dword)
+//   section <bus> <dev> <slot>                  -> "ok <hex bytes>"       (xclbin section the dext keeps: 0 mem
+//                                                                           topology, 1 ip layout, 2 connectivity)
+//   clock <bus> <dev> <index>                   -> "ok <MHz>"             (kernel clock counter, 0..2)
+//   uuid <bus> <dev>                            -> "ok <32 hex>"          (UUID of the xclbin the dext loaded)
 //   quit
 // Errors: "err <reason>". READ-ONLY: the dext maps BARs read-only (kIOUserClientMemoryReadOnly) and this tool has no
 // write request. Built against the port's xrt_dext_abi.h; refuses a dext whose ABI version differs (a tool built
@@ -88,6 +92,34 @@ int main() {
       uint64_t in = off, out = 0; uint32_t outn = 1;
       if (IOConnectCallScalarMethod(x->conn, XRT_DEXT_CFG_READ, &in, 1, &out, &outn) != KERN_SUCCESS) { puts("err cfg read failed"); continue; }
       printf("ok %llx\n", (unsigned long long)out); continue;
+    }
+    // management-function queries the dext answers from what it keeps (no register access from this process)
+    if (!strcmp(cmd, "section") && sscanf(line, "%*s %x %x %x", &b, &d, &n) == 3) {
+      fn* x = find(b, d, 0); if (!x) { puts("err no management function"); continue; }
+      std::vector<unsigned char> res; uint64_t total = 0; bool bad = false;
+      do {
+        uint64_t in[2] = { n, res.size() }; uint64_t out = 0; uint32_t nout = 1;
+        unsigned char chunk[XRT_SECTION_CHUNK]; size_t got = sizeof(chunk);
+        if (IOConnectCallMethod(x->conn, XRT_DEXT_GET_SECTION, in, 2, nullptr, 0, &out, &nout, chunk, &got) != KERN_SUCCESS
+            || out > XRT_SECTION_MAX_BYTES) { bad = true; break; }
+        total = out; if (!got) break;
+        res.insert(res.end(), chunk, chunk + got);
+      } while (res.size() < total);
+      if (bad || res.size() != total) { puts("err no such section (no xclbin loaded through this dext?)"); continue; }
+      printf("ok "); for (unsigned char c : res) printf("%02x", c); printf("\n"); continue;
+    }
+    if (!strcmp(cmd, "clock") && sscanf(line, "%*s %x %x %x", &b, &d, &n) == 3) {
+      fn* x = find(b, d, 0); if (!x) { puts("err no management function"); continue; }
+      uint64_t in = n, out = 0; uint32_t nout = 1;
+      kern_return_t kr = IOConnectCallScalarMethod(x->conn, XRT_DEXT_CLOCK_MEASURE, &in, 1, &out, &nout);
+      if (kr != KERN_SUCCESS) { printf("err clock %u: 0x%x\n", n, kr); continue; }
+      printf("ok %llu\n", (unsigned long long)out); continue;
+    }
+    if (!strcmp(cmd, "uuid") && sscanf(line, "%*s %x %x", &b, &d) == 2) {
+      fn* x = find(b, d, 0); if (!x) { puts("err no management function"); continue; }
+      unsigned char u[16] = {0}; size_t sz = sizeof(u);
+      if (IOConnectCallStructMethod(x->conn, XRT_DEXT_GET_XCLBIN_UUID, nullptr, 0, u, &sz) != KERN_SUCCESS) { puts("err uuid"); continue; }
+      printf("ok "); for (unsigned char c : u) printf("%02x", c); printf("\n"); continue;
     }
     bool bulk = !strcmp(cmd, "rb");
     if ((!strcmp(cmd, "r") && sscanf(line, "%*s %x %x %x %x %llx", &b, &d, &f, &n, &off) == 5) ||

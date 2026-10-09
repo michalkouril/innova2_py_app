@@ -202,6 +202,13 @@ class MacHost(H.Host):
         if name in ("rom.*/VBNV", "rom.*/timestamp"):
             vbnv, ts = self._rom(bdf)
             return vbnv if name.endswith("VBNV") else (str(ts) if ts else None)
+        if name == "xclbinuuid":                     # the dext's record of the xclbin it loaded
+            fn = self._mgmt_of(bdf)
+            r = self.regio_helper().ask("uuid %x %x" % (fn["bus"], fn["dev"])) if fn else ""
+            if not r.startswith("ok "):
+                return None
+            u = r.split()[1]
+            return "%s-%s-%s-%s-%s" % (u[:8], u[8:12], u[12:16], u[16:20], u[20:])
         if name == "ready":
             return "0x1" if bdf in self.dext_fns() else None
         if name == "mig_calibration" and bdf in self.dext_fns():
@@ -213,8 +220,21 @@ class MacHost(H.Host):
     def attrs(self, bdf, pattern):
         return {}
 
+    SECTIONS = {"icap.*/mem_topology": 0, "icap.*/ip_layout": 1, "icap.*/connectivity": 2}
+
+    def _mgmt_of(self, bdf):
+        fn = self.dext_fns().get(bdf.rsplit(".", 1)[0] + ".0")
+        return fn
+
     def raw(self, bdf, name, n=4096):
-        return None
+        """xocl's binary icap.*/{mem_topology,ip_layout,connectivity}: the same axlf sections, which the dext keeps for
+        the xclbin it loaded (XRT_DEXT_GET_SECTION, slots 0/1/2)."""
+        slot = self.SECTIONS.get(name)
+        fn = self._mgmt_of(bdf)
+        if slot is None or not fn:
+            return None
+        r = self.regio_helper().ask("section %x %x %x" % (fn["bus"], fn["dev"], slot))
+        return bytes.fromhex(r[3:])[:n] if r.startswith("ok ") else None
 
     def driver(self, bdf):
         fn = self.dext_fns().get(bdf)

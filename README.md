@@ -155,10 +155,10 @@ health registers (the `ddr_health` block at management BAR0 + 0x36000, SYSMON, X
 (-> `~/.local/bin/innova2-smi`). It is picked automatically on macOS (`innova2_smi_macos.MacHost`): PCI topology, IDs and
 link state from the IOKit device tree (`ioreg`), shell registers and PCI configuration space through `innova2_regio`
 (holds the dext's BAR mappings), the feature ROM through the user function. Works: `list`, `status`, `ddr`, `memory`
-(where the loaded xclbin's topology is readable), `counters`, `check`, `regmap`, `ddr-assess --from-logs`.
+(memory topology and xclbin UUID from the dext's kept sections), `counters`, `check`, `regmap`, `ddr-assess --from-logs`.
 **Read-only:** the dext maps BARs read-only, so commands that write registers (`recorder`, `ddr-mode`, `clear`,
 `throttle`, `test`) are refused with that reason; `status` shows the flight recorder as not available. Not available on
-macOS: ConnectX-5 access (no mlx5 driver), PCIe AER counters, VPD, xocl/xclmgmt sysfs reports (clock frequencies); the
+macOS: ConnectX-5 access (no mlx5 driver), PCIe AER counters, VPD, kernel clock frequencies (the dext learns the counters from a platform package); the
 boot-xsabin check does not apply (the port identifies these shells by their feature ROM).
 
 **Output convention (owner, 2026-10-08; 1.3.14):** every read-only report run **without parameters prints a short
