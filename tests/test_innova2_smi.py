@@ -2243,6 +2243,18 @@ class Rc1Tests(unittest.TestCase):
         if first_ts_before_last_ld:                          # the fence in the FIRST link-down: timestamps cannot place it
             h.model.r[0xE0], h.model.r[0xF0] = 5000, 4000
 
+    def test_cuintr_platform_version_4(self):
+        """202320.4 (CU completion interrupts) reads the same register maps as 202320.3; an unknown version is refused."""
+        for oid, vbnv in ((RC1, R.VBNV_FP8C_4), (RV3, R.VBNV_ROUTEV_4)):
+            h = MockHost(oid)
+            h.attrs_[("0000:08:00.0", "rom.m.1/VBNV")] = vbnv
+            r = self.check(h)
+            self.assertNotIn("identity.refused", self.rules(r), vbnv)
+            self.assertNotIn("identity.obs_mismatch", self.rules(r), vbnv)
+        h = MockHost(RC1)
+        h.attrs_[("0000:08:00.0", "rom.m.1/VBNV")] = "innova2_innova2_xdma_202320_5"
+        self.assertIn("identity.refused", self.rules(self.check(h), "FAIL"))
+
     def test_layout_and_build(self):
         lay = R.layout(RC1)
         self.assertTrue(R.has_fencewin(lay) and lay["e7a3"] and lay["released"])

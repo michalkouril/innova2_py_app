@@ -43,7 +43,13 @@ import math
 VBNV_FP8C = "innova2_innova2_xdma_202320_3"       # fp8c and later (PLATFORM_VENDOR innova2)
 VBNV_OLD = "xilinx_innova2_xdma_202320_3"          # pre-fp8c production shells (inn2x r3..r7): identity only
 VBNV_ROUTEV = "innova2_innova2_noddr_202320_3"     # route V: DDR4 MIG in the dynamic region (per xclbin)
-VBNVS = (VBNV_FP8C, VBNV_ROUTEV)                   # platforms whose ddr_health map this tool reads
+# platform version 202320.4 = the same shells plus CU completion interrupts (cu_intc / cfg_gpio in the static region,
+# rebuild/CU_INTERRUPTS.md section 7): same register maps as their 202320.3 counterparts
+VBNV_FP8C_4 = "innova2_innova2_xdma_202320_4"
+VBNV_ROUTEV_4 = "innova2_innova2_noddr_202320_4"
+VBNVS_STATIC_DDR = (VBNV_FP8C, VBNV_FP8C_4)         # DDR MIG in the static region (never pruned)
+VBNVS_ROUTEV = (VBNV_ROUTEV, VBNV_ROUTEV_4)         # DDR MIG in the dynamic region
+VBNVS = VBNVS_STATIC_DDR + VBNVS_ROUTEV             # platforms whose ddr_health map this tool reads
 FPGA_VENDOR, FPGA_MGMT_DEV, FPGA_USER_DEV = "0x10ee", "0x788f", "0x6a90"
 CX5_VENDOR, BOPE_DEV = "0x15b3", "0x0264"
 

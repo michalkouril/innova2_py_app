@@ -551,7 +551,7 @@ class Shell:
                                                                               known["obs_id"], oid))
         if not known:
             self.name = "unlisted build (ROM_TS %d), %s layout" % (self.rom_ts, lay["name"])
-        if R.is_routev(lay) != (self.vbnv == R.VBNV_ROUTEV):
+        if R.is_routev(lay) != (self.vbnv in R.VBNVS_ROUTEV):
             self.warnings.append("VBNV %s with OBS_ID 0x%08X (%s): the platform and the shell's register layout "
                                  "disagree -- using the register map of the OBS_ID" % (self.vbnv, oid, lay["name"]))
         self.guard.allow(reads=R.read_set(oid), writes=R.write_set(oid))
@@ -1206,7 +1206,7 @@ def _bank_state(b, ctx):
             return False, "PRUNED but used by kernels (no MIG behind it)", True, ev
         return None, "PRUNED", True, ev
     if not used:
-        if k == "DDR" and ctx.get("platform") == R.VBNV_FP8C:
+        if k == "DDR" and ctx.get("platform") in R.VBNVS_STATIC_DDR:
             return None, "unused (static DDR: never pruned)", False, "the fp8c MIG is in the static region"
         if k in ("PLRAM", "HOST", "PEER"):
             return None, "unused (may be pruned)", None, NO_MARKER

@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.19
+Version: 1.3.20
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -108,6 +108,8 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Sun Oct 11 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.20-0.1
+- Platform version 202320.4 (CU completion interrupts): innova2_innova2_xdma_202320_4 and _noddr_202320_4.
 * Fri Oct 09 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.19-0.1
 - macOS: register writes through the dext (XRT_DEXT_REG_WRITE); recorder/clear/ddr-mode/throttle on macOS.
 * Fri Oct 09 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.18-0.1
