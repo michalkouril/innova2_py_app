@@ -40,6 +40,10 @@ FP8C CUINTR t17 (OBS_ID 0x0B5E000C, VBNV innova2_innova2_xdma_202320_4, ROM_TS 1
 DDR (e6b750, CA RDRV_60_60) plus CU completion interrupts (cu_intc 0x120000, cfg_gpio 0x121000; rebuild/
 CU_INTERRUPTS.md section 7). Its exported platform swaps the interrupt ids of In0 and In1 (found 6): CU mode
 (`echo cu > kds_interrupt`) can storm and hang the host with xclbins linked against it. Polling (the default) is fine.
+
+FP8C CUINTR t18 (OBS_ID 0x0B5E000C, VBNV innova2_innova2_xdma_202320_4, ROM_TS 1792494000): t17 with explicit
+PFM.IRQ ids (In<n> = id n), so v++ wires CU id n to cu_intc bit n. CU mode passed on hardware (one MSI-X per job).
+Same interface uuid as t17; its own ROM_TS, so t17 xclbins are refused on it.
 """
 
 import math
@@ -83,6 +87,9 @@ SHELLS = {
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
     # 202320.4 prototype t17 (CU interrupts; interface uuid from release/INTERFACE_UUID = bandwidth.xclbin's static uuid)
     1792490400: dict(name="fp8c-cuintr-t17", obs_id=0x0B5E000C, uuid="cc9ca4d0d12590f0d969ee55c8431a32",
+                     ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
+    # 202320.4 prototype t18: t17 with explicit PFM.IRQ ids (same interface uuid)
+    1792494000: dict(name="fp8c-cuintr-t18", obs_id=0x0B5E000C, uuid="cc9ca4d0d12590f0d969ee55c8431a32",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60"),
     1792465200: dict(name="routeV", obs_id=0x0B5E0008, uuid="5027516c91a681bd01afaf11083d9d60", boot_rm="KEPT template",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
@@ -429,6 +436,7 @@ MIG_BUILDS = {
     1792472400: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
     1792483200: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
     1792490400: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
+    1792494000: dict(_MIG_2666, variant="e6b750", ca_drive="RDRV_60_60 (ca_drive.tcl, routed gate passed)"),
     # route V: the MIG is in each KEPT xclbin; these are the template's (MIG_VARIANT e6b750, CA_DRIVE RDRV_48_48, the
     # in-RP ddr_ecc_poller's POLL_CYC 333000). An xclbin built from another template differs: DDR_INFO will say.
     1792465200: dict(_MIG_2666, variant="e6b750 (route-V template; per xclbin)", per_xclbin=True,

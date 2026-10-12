@@ -2275,6 +2275,13 @@ class Rc1Tests(unittest.TestCase):
         self.assertEqual("%x" % 1792490400, "6ad73ba0")
         self.assertEqual(R.MIG_BUILDS[1792490400], R.MIG_BUILDS[1792483200])
 
+    def test_cuintr_t18_build(self):
+        # t18: t17 with explicit PFM.IRQ ids; same interface uuid, its own ROM_TS
+        b = R.SHELLS[1792494000]
+        self.assertEqual((b["obs_id"], b["name"], b["uuid"]), (RC1, "fp8c-cuintr-t18", R.SHELLS[1792490400]["uuid"]))
+        self.assertEqual("%x" % 1792494000, "6ad749b0")
+        self.assertEqual(R.MIG_BUILDS[1792494000], R.MIG_BUILDS[1792483200])
+
     def test_map_against_the_rtl(self):
         if not os.path.exists(RC1_RTL):
             self.skipTest("rc1 shell source not on this machine")
