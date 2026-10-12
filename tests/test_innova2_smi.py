@@ -2268,6 +2268,13 @@ class Rc1Tests(unittest.TestCase):
         self.assertIn("RDRV_60_60", R.MIG_BUILDS[1792483200]["ca_drive"])
         self.assertEqual(R.THR_DEFAULTS[RC1], R.THR_DEFAULTS[0x0B5E000A])
 
+    def test_cuintr_t17_build(self):
+        # the 202320.4 prototype t17: its own ROM_TS, rc1's map and MIG
+        b = R.SHELLS[1792490400]
+        self.assertEqual((b["obs_id"], b["name"], b["uuid"]), (RC1, "fp8c-cuintr-t17", "cc9ca4d0d12590f0d969ee55c8431a32"))
+        self.assertEqual("%x" % 1792490400, "6ad73ba0")
+        self.assertEqual(R.MIG_BUILDS[1792490400], R.MIG_BUILDS[1792483200])
+
     def test_map_against_the_rtl(self):
         if not os.path.exists(RC1_RTL):
             self.skipTest("rc1 shell source not on this machine")
