@@ -1,3 +1,13 @@
+innova2-app (1.3.23) unstable; urgency=medium
+
+  * innova2_areg builds on kernel 6.12 and later: the unaligned helpers
+    moved from asm/unaligned.h to linux/unaligned.h, so the module did not
+    compile on Ubuntu 26.04 (kernel 7.0). Tested against DOCA-OFED 3.5
+    mlx5 (mlnx-ofed-kernel 2607.0.100): query, temperature and health
+    work through the node, and innova2-smi reads the image state.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Wed, 14 Oct 2026 23:50:00 -0400
+
 innova2-app (1.3.22) unstable; urgency=medium
 
   * Known build fp8c-cuintr-t18 (platform version 202320.4, ROM_TS

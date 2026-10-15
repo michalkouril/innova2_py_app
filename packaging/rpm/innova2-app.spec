@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.22
+Version: 1.3.23
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -108,6 +108,8 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Wed Oct 14 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.23-0.1
+- innova2_areg builds on kernel >= 6.12 (linux/unaligned.h): Ubuntu 26.04 (7.0), inbox or DOCA-OFED mlx5.
 * Mon Oct 12 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.22-0.1
 - Known build: fp8c-cuintr-t18 (202320.4 prototype, ROM_TS 1792494000): t17 with fixed CU interrupt ids.
 * Sun Oct 11 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.21-0.1

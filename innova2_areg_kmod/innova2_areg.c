@@ -56,7 +56,12 @@
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
 #include <linux/version.h>
+/* 6.12 moved the unaligned helpers to linux/; asm/unaligned.h is gone on Ubuntu 26.04's 7.0. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#include <linux/unaligned.h>
+#else
 #include <asm/unaligned.h>
+#endif
 
 #define DRV "innova2_areg"
 
