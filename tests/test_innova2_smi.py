@@ -2275,6 +2275,11 @@ class Rc1Tests(unittest.TestCase):
         self.assertEqual("%x" % 1792490400, "6ad73ba0")
         self.assertEqual(R.MIG_BUILDS[1792490400], R.MIG_BUILDS[1792483200])
 
+    def test_noddr_r1_build(self):
+        # the released noddr shell (route V r3x4) keeps r3's ROM_TS and name, with its own static uuid
+        b = R.SHELLS[1792486800]
+        self.assertEqual((b["obs_id"], b["name"], b["uuid"], b["boot_rm"]), (RV3, "routeV3", "9975da591e3d49aab449ab760829ddd0", "filler"))
+
     def test_cuintr_t18_build(self):
         # t18: t17 with explicit PFM.IRQ ids; same interface uuid, its own ROM_TS
         b = R.SHELLS[1792494000]

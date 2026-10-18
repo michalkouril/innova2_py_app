@@ -96,8 +96,10 @@ SHELLS = {
     # route V r2: the flash image boots with the PRUNED filler in the dynamic region (no MIG at power-on)
     1792479600: dict(name="routeV2", obs_id=0x0B5E000B, uuid="af913744c494e27fe46148db9ab1392c", boot_rm="filler",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_48_48, MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
-    # route V r3: r2's map and filler boot RM; uuid from the rebuilt r3 static (mgmt_status pblock fix f1e2cf7), boot.xsabin header (2026-10-08)
-    1792486800: dict(name="routeV3", obs_id=0x0B5E000D, uuid="0c29d9ae4f1bc4206d5448d84835d27a", boot_rm="filler",
+    # route V r3: r2's map and filler boot RM. The released noddr shell (innova2-noddr 202320.3.0-1 = route V r3x4,
+    # crossbar static) keeps r3's ROM_TS; uuid from its INTERFACE_UUID / boot.xsabin header (2026-10-18). The
+    # pre-release r3 static (0c29d9ae4f1bc4206d5448d84835d27a, 2026-10-08) is superseded.
+    1792486800: dict(name="routeV3", obs_id=0x0B5E000D, uuid="9975da591e3d49aab449ab760829ddd0", boot_rm="filler",
                      ddr="DDR4-2666 72-bit ECC, CA RDRV_60_60 (link default), MIG in the dynamic region (KEPT/PRUNED per xclbin)"),
 }
 
