@@ -11,6 +11,7 @@ innova2_smi_regmap), so it checks the tool's maps independently: any read the re
 HardLock, which is what the host would do. Run:  python3 -m unittest discover -s tests -v
 Nothing here touches hardware, /tmp, or the user's home (HOME is pointed at tests/.state)."""
 
+import hashlib
 import io
 import json
 import os
@@ -29,6 +30,7 @@ os.environ["HOME"] = STATE
 
 import innova2_smi as SMI            # noqa: E402
 import innova2_smi_check as C        # noqa: E402
+import innova2_smi_flash as F        # noqa: E402
 import innova2_smi_hw as H           # noqa: E402
 import innova2_smi_regmap as R       # noqa: E402
 import innova2_smi_tests as T        # noqa: E402
@@ -449,6 +451,16 @@ class MockHost:
 
     def exists(self, path):
         return path in self.files or path in self.links
+
+    def sha256(self, path):
+        v = self.files.get(path)
+        return None if v is None else hashlib.sha256(v if isinstance(v, bytes) else v.encode()).hexdigest()
+
+    def run_live(self, cmd, env=None):
+        self.live = getattr(self, "live", []) + [cmd]
+        if cmd[-2:] == ["image-sel", "user"]:
+            self.cx5 = dict(self.cx5, admin=0)
+        return getattr(self, "live_rc", {}).get(len(self.live), 0)
 
     def glob(self, pattern):
         return sorted({p for p in list(self.files) + list(self.links) if fnmatch(p, pattern)} |
@@ -1327,6 +1339,209 @@ class ThrottleWordingTests(unittest.TestCase):
         o = self.st(MockHost(0x0B5E0005))
         self.assertIn("in effect: FULL (not throttled)", o)
         self.assertIn("auto         : one tier at the FORCE level (1/2)", o)
+
+
+
+# ----------------------------------------------------------------------------------------------- setup / flash
+TEST_VBNV = "innova2_innova2_test_202320_9"
+TEST_TS = 1792600000
+
+
+def install_test_shell(h, rom_ts=TEST_TS, corrupt=None, tool=True):
+    """A shell package with a manifest (fake images: their sha256 is what the manifest lists)."""
+    fw = "/lib/firmware/xilinx/" + TEST_VBNV
+    files = dict(mcs_primary=fw + "_primary.mcs", mcs_secondary=fw + "_secondary.mcs",
+                 bope_primary=fw + "_bope_primary.bin", bope_secondary=fw + "_bope_secondary.bin")
+    img = {}
+    for r, f in files.items():
+        h.files[f] = ("image " + r).encode()
+        img[r] = dict(path=f, sha256=hashlib.sha256(h.files[f]).hexdigest())
+    xs = F.boot_xsabin_path(rom_ts)
+    h.files[xs] = b"xsabin"
+    m = dict(format=1, name="test r9", package="innova2-test", version="202320.9.0-1", vbnv=TEST_VBNV, rom_ts=rom_ts,
+             flash_tool="/usr/bin/innova2_test_flash_user", images=img,
+             boot_xsabin=dict(path=xs, sha256=hashlib.sha256(b"xsabin").hexdigest()), download="https://x/t.deb")
+    h.files["/opt/xilinx/dsa/%s/innova2_flash.json" % TEST_VBNV] = json.dumps(m)
+    if tool:
+        h.files[m["flash_tool"]] = b"#!/bin/sh"
+    if corrupt:
+        h.files[files[corrupt]] = b"flipped"
+    return m
+
+
+def flash_host(fpga="shell", areg=True, **kw):
+    h = MockHost(fpga=fpga, **kw)
+    h.files[F.XBFLASH] = b"x"
+    h.files[F.APP] = b"x"
+    h.files[os.path.join(F.HERE, "rawspi.py")] = b"x"
+    if areg:
+        h.files["/sys/module/innova2_areg"] = b""
+    return h
+
+
+class FlashTests(unittest.TestCase):
+    def test_setup_nothing_installed(self):
+        h = flash_host()
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 1, o + e)
+        self.assertIn("MISSING  shell noddr r1", o)
+        self.assertIn("innova2-noddr_202320.3.0-2_all.deb && sudo apt install ./innova2-noddr_202320.3.0-2_all.deb", o)
+        self.assertIn("to do first:", o)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_setup_ready_names_the_flash_command(self):
+        h = flash_host()
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("ok       shell test r9", o)
+        self.assertIn("flashable (xrt route)", o)
+        self.assertIn("next:\n  sudo innova2-smi flash\n", o)
+        self.assertNotIn("noddr r1", o)                  # available-but-not-installed shells only with -v
+        rc, o, e = run_cli(h, ["setup", "-v"])
+        self.assertIn("info     shell noddr r1", o)
+
+    def test_setup_reports_a_damaged_image(self):
+        h = flash_host()
+        install_test_shell(h, corrupt="bope_secondary")
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 1)
+        self.assertIn("FAIL", o)
+        self.assertIn("_bope_secondary.bin: sha256", o)
+
+    def test_setup_missing_areg_and_xrt(self):
+        h = flash_host(areg=False)
+        install_test_shell(h)
+        h.which_xrt = lambda: None
+        old = h.run
+        h.run = lambda cmd, timeout=60, env=None: (1, "not found") if cmd[:1] == ["modinfo"] else old(cmd, timeout, env)
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 1)
+        self.assertIn("MISSING  XRT (no xrt-smi)", o)
+        self.assertIn("innova2-areg-dkms_%s_all.deb" % SMI._version(), o)
+
+    def test_setup_partial_hand_copy_is_a_warning(self):
+        h = flash_host()
+        install_test_shell(h)
+        h.files[F.BUILTIN[0]["boot_xsabin"]["path"]] = b"x"    # only the boot xsabin, copied by hand
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 0, o)
+        self.assertIn("WARN     shell noddr r1", o)
+        self.assertIn("only partly on this host (1 of 5 files, not from the package)", o)
+
+    def test_setup_never_suggests_replacing_a_released_shell(self):
+        h = flash_host()
+        install_test_shell(h, rom_ts=1792600001)
+        h.attrs_[("0000:08:00.0", "rom.m.1/timestamp")] = str(F.BUILTIN[0]["rom_ts"])     # the card runs noddr r1
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertIn("runs noddr r1 (its package is not installed); flashable (xrt route); to write another shell: "
+                      "sudo innova2-smi flash --shell 'test r9'", o)
+        self.assertNotIn("next:", o)
+
+    def test_bad_manifest_is_ignored(self):
+        h = flash_host()
+        m = install_test_shell(h)
+        m["flash_tool"] = "/srv/x/evil.sh"
+        h.files["/opt/xilinx/dsa/%s/innova2_flash.json" % TEST_VBNV] = json.dumps(m)
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertIn("is not under /usr/bin/ or /opt/xilinx/dsa/ -- ignored", o)
+        self.assertNotIn("shell test r9", o)
+
+    def test_flash_xrt_route(self):
+        h = flash_host()
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertEqual(h.live, [["/usr/bin/innova2_test_flash_user", "--card", "0000:08:00.0", "--yes"]])
+        self.assertIn("FLASH-DONE", o)
+        self.assertIn("COLD", o)
+
+    def test_flash_dry_run_writes_nothing(self):
+        h = flash_host()
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash", "--dry-run"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("/usr/bin/innova2_test_flash_user --card 0000:08:00.0 --yes", o)
+        self.assertIn("dry run: nothing was written", o)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_flash_refuses_without_a_terminal(self):
+        h = flash_host()
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash"])
+        self.assertEqual(rc, 1)
+        self.assertIn("refusing without --yes", e)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_flash_already_running(self):
+        h = flash_host()
+        install_test_shell(h, rom_ts=ROM_TS[0x0B5E0006])
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("already runs this shell: nothing to do", o)
+        self.assertEqual(getattr(h, "live", []), [])
+        rc, o, e = run_cli(h, ["flash", "--yes", "--force"])
+        self.assertEqual(len(h.live), 1)
+
+    def test_flash_refuses_a_damaged_image(self):
+        h = flash_host()
+        install_test_shell(h, corrupt="mcs_primary")
+        rc, o, e = run_cli(h, ["flash", "--yes", "--shell", "test r9"])
+        self.assertEqual(rc, 1)
+        self.assertIn("damaged", e)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_flash_bope_route_selects_user(self):
+        h = flash_host(fpga="bope", cx5=dict(admin=1, oper=1, status=0, transport="kmod"))
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        burn, sel = h.live
+        self.assertEqual(burn[2:7], ["-d", "0000:09:00.0", "-p", "0000:08:00.0", "--yes"])
+        self.assertIn("/lib/firmware/xilinx/%s_bope_primary.bin,0" % TEST_VBNV, burn)
+        self.assertIn("/lib/firmware/xilinx/%s_bope_secondary.bin,1" % TEST_VBNV, burn)
+        self.assertEqual(burn[-2:], ["--batch", "burn"])
+        self.assertEqual(sel[-3:], ["--batch", "image-sel", "user"])
+
+    def test_flash_bope_needs_areg(self):
+        h = flash_host(fpga="bope", areg=False, cx5=dict(admin=1, oper=1, status=0, transport="kmod"))
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("modprobe innova2_areg", e)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_flash_stops_when_the_write_fails(self):
+        h = flash_host(fpga="bope", cx5=dict(admin=1, oper=1, status=0, transport="kmod"))
+        install_test_shell(h)
+        h.live_rc = {1: 1}
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("do NOT power cycle", o)
+        self.assertEqual(len(h.live), 1)                 # no image-sel after a failed burn
+
+    def test_flash_refuses_other_states(self):
+        h = flash_host(fpga="tester")
+        install_test_shell(h)
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("image-sel flex", e)
+
+    def test_flash_needs_a_choice_between_shells(self):
+        h = flash_host()
+        install_test_shell(h)
+        noddr = F.BUILTIN[0]
+        for f in list(noddr["images"].values()) + [noddr["boot_xsabin"]]:
+            h.files[f["path"]] = b"x"
+        h.files[noddr["flash_tool"]] = b"x"
+        h.sha256 = lambda p, o=h.sha256: next((f["sha256"] for f in list(noddr["images"].values()) +
+                                               [noddr["boot_xsabin"]] if f["path"] == p), None) or o(p)
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("several shells are installed", e)
+        rc, o, e = run_cli(h, ["flash", "--yes", "--shell", "innova2-noddr"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertEqual(h.live[-1][0], "/usr/bin/innova2_noddr_flash_user")
 
 
 if __name__ == "__main__":

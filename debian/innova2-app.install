@@ -9,4 +9,5 @@ innova2_smi_ddrassess.py usr/lib/innova2-app
 innova2_smi_macos.py usr/lib/innova2-app
 innova2_smi_tests.py usr/lib/innova2-app
 innova2_smi_xrt.py usr/lib/innova2-app
+innova2_smi_flash.py usr/lib/innova2-app
 VERSION usr/lib/innova2-app

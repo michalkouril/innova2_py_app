@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.24
+Version: 1.3.25
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -54,7 +54,7 @@ grep -qx 'PACKAGE_VERSION="%{dkms_ver}"' innova2_areg_kmod/dkms.conf
 %install
 install -d %{buildroot}%{_prefix}/lib/innova2-app %{buildroot}%{_bindir} %{buildroot}%{_localstatedir}/lib/innova2-app
 install -m 755 innova2_app.py rawspi.py innova2_areg.sh innova2_smi.py %{buildroot}%{_prefix}/lib/innova2-app/
-install -m 644 innova2_smi_regmap.py innova2_smi_hw.py innova2_smi_check.py innova2_smi_ddrassess.py innova2_smi_macos.py innova2_smi_tests.py innova2_smi_xrt.py \
+install -m 644 innova2_smi_regmap.py innova2_smi_hw.py innova2_smi_check.py innova2_smi_ddrassess.py innova2_smi_macos.py innova2_smi_tests.py innova2_smi_xrt.py innova2_smi_flash.py \
     VERSION %{buildroot}%{_prefix}/lib/innova2-app/
 ln -s ../lib/innova2-app/innova2_app.py %{buildroot}%{_bindir}/innova2_app
 ln -s ../lib/innova2-app/innova2_areg.sh %{buildroot}%{_bindir}/innova2_areg
@@ -108,6 +108,8 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Mon Oct 19 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.25-0.1
+- innova2-smi setup (read-only host check with fixes) and flash (User slot, via the shell package's tool or the Flex burn).
 * Sun Oct 18 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.24-0.1
 - Known build: the released noddr shell (route V r3x4, ROM_TS 1792486800): interface uuid 9975da59...
 * Wed Oct 14 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.23-0.1

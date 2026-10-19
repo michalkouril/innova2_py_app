@@ -19,11 +19,13 @@ MMIO RULES (measured on these cards, see the shell notes):
 
 import ctypes
 import glob
+import hashlib
 import json
 import mmap
 import os
 import re
 import subprocess
+import sys
 import time
 
 import innova2_smi_regmap as R
@@ -148,6 +150,24 @@ class Host:
             return 127, str(e)
         except subprocess.TimeoutExpired as e:
             return 124, "timed out after %d s: %s" % (timeout, " ".join(cmd))
+
+    def run_live(self, cmd, env=None):
+        """Run with the terminal attached (progress and prompts reach the user); the return code."""
+        try:
+            return subprocess.call(cmd, env=env)
+        except OSError as e:
+            print("*** %s: %s" % (cmd[0], e), file=sys.stderr)
+            return 127
+
+    def sha256(self, path):
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for b in iter(lambda: f.read(1 << 20), b""):
+                    h.update(b)
+        except OSError:
+            return None
+        return h.hexdigest()
 
     def driver(self, bdf):
         p = os.path.join(SYS_PCI, bdf, "driver")

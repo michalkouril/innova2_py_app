@@ -1045,15 +1045,16 @@ def verify_burn(b):
 
 
 def burning_all():
+    """[ext] returns True only when every file burned and its sampled read-back matched (--batch burn's rc)."""
     if not C.b_files:
         oprintf(0, "Files for burning are not defined. Nothing to burn\n")
     if C.bope is None and not C.developer_mode:
         oprintf(0, "\n\tYou are trying to burn an image using the Innova2_Flex image.\n"
                    "\tBurning requires installing the factory driver.\n"
                    "\tPlease install the driver and try again\n")
-        return
+        return False
     if not C.b_files:
-        return
+        return False
     fpga_not_busy()
     for b in C.b_files:
         set_burn_default_args(b)
@@ -1065,8 +1066,7 @@ def burning_all():
             for b in C.b_files:
                 if b["flash"] == flash:
                     burning_file(b, pass_)
-    for b in C.b_files:
-        verify_burn(b)
+    return all([verify_burn(b) is True for b in C.b_files])
 
 
 # ---------------------------------------------------------------- menu actions
@@ -1475,7 +1475,7 @@ def batch(dev, args, cx5_bdf):
         print("\t*** PCI test: %s" % ("failed" if pci_test() else "passed"))
     elif cmd == "burn":
         open_bope()
-        burning_all()
+        return 0 if burning_all() else 1
     elif cmd == "burn-inshell":
         return burn_inshell(cx5_bdf, args[1])
     else:

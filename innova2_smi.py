@@ -17,6 +17,8 @@
   innova2-smi test <name>|all              active tests (validate, ddr-soak, temp-live, throttle, pr-stress, p2p,
                                            ecc-live, flash-verify)
   innova2-smi regmap [--markdown|--check-rtl ddr_health.v]   the register maps this tool uses
+  innova2-smi setup                        what this host has and what flashing needs (read-only; prints the fixes)
+  innova2-smi flash    [-d CARD] [--shell NAME] [--dry-run]   write an installed shell into the User slot
 
 Read-only by default. Every register access goes through the running shell's OBS_ID register map; an unknown shell
 is refused before anything but its OBS_ID is read (an undecoded management read hard-locks the host). Run as root.
@@ -38,11 +40,12 @@ if HERE not in sys.path:
 
 import innova2_smi_check as C          # noqa: E402
 import innova2_smi_ddrassess as A      # noqa: E402
+import innova2_smi_flash as F          # noqa: E402
 import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.24"
+VERSION = "1.3.25"
 
 
 def _version():
@@ -343,6 +346,18 @@ def cmd_list(host, args):
         for n in r["cx5_health"]["notes"]:
             print(wrap_text("note: %s" % n, w))
     return 0
+
+
+# ----------------------------------------------------------------------------------------------- setup / flash
+def cmd_setup(host, args):
+    """Read-only: XRT, innova2_areg, the shells installed on this host (images checked against their sha256) and
+    every card's state, with the command that fixes each gap and the 'flash' command to run next."""
+    return F.cmd_setup(host, args, _version(), lambda: cards(host, args))
+
+
+def cmd_flash(host, args):
+    """Write an installed shell into the User slot of one card, schedule the User image, then ask for a cold cycle."""
+    return F.cmd_flash(host, args, lambda: cards(host, args), confirm)
 
 
 # ----------------------------------------------------------------------------------------------- status
@@ -1430,6 +1445,14 @@ THROTTLE_HELP = """actions (E7a2 and later; state changes ask for confirmation u
   defaults                             the power-on values
 """
 
+FLASH_HELP = """Only the User slot (0x01000000) is written; Factory and Flex never are. The route follows what the card runs:
+  an innova2 XRT shell (10ee:788f, xclmgmt bound): the shell package's flash tool (both flash chips probed first,
+      Factory scanned before and after);
+  the Flex image (burn endpoint 15b3:0264): innova2_app -b <chip0>.bin,0 -b <chip1>.bin,1 --batch burn;
+  anything else: refused -- select the Flex image (innova2_app --batch image-sel flex) and cold cycle first.
+Then the User image is scheduled through the ConnectX (innova2_areg) when it is not already, and the host must be COLD
+cycled. Every image is checked against its sha256 first. -d is required when the host has several cards."""
+
 TEST_HELP = """tests:
 """ + "\n".join("  %-13s %s%s" % (k, v["doc"], " [loads xclbins/uses DDR: --yes]" if v["writes"] else "")
                 for k, v in T.TESTS.items()) + """
@@ -1553,6 +1576,15 @@ def build_parser():
     q.add_argument("--mcs-prefix", help="flash-verify: <prefix>_primary.mcs / _secondary.mcs instead of .bin files")
     q.add_argument("--offset", type=lambda s: int(s, 0), default=0x01000000,
                    help="flash-verify: flash address of the .bin images (default 0x01000000, the User slot)")
+    q = add("setup", cmd_setup, "what this host has and what flashing a card needs (read-only)",
+            epilog="Nothing is installed or written: each gap is listed with the command that fixes it. "
+                   "Exit 0 when flashing can go ahead, 1 otherwise. Shell packages: " + F.MANIFEST_DOC)
+    q.add_argument("-v", "--verbose", action="store_true", help="also the shells available but not installed")
+    q = add("flash", cmd_flash, "write an installed shell into the User slot of a card (confirmation)",
+            epilog=FLASH_HELP)
+    q.add_argument("--shell", help="the shell to write, by name, package or VBNV (needed when several are installed)")
+    q.add_argument("--dry-run", action="store_true", help="show the plan and the commands; write nothing")
+    q.add_argument("--force", action="store_true", help="write even when the card already runs this shell")
     q = add("regmap", cmd_regmap, "the register maps this tool uses")
     q.add_argument("--markdown", action="store_true", help="the register-map document (docs/innova2_smi_regmap.md)")
     q.add_argument("--check-rtl", nargs="+", metavar="DDR_HEALTH_V", help="compare with ddr_health.v read muxes")
