@@ -297,34 +297,56 @@ def areg_rows(host, rows, app_ver):
                   url, app_ver, app_ver))
 
 
-def shell_rows(rows, shells, problems):
+def shell_rows(rows, shells, problems, runners):
+    """runners: {rom_ts: [card index, ...]} of the cards running each build. A shell a card runs but whose package is
+    missing is worth installing (WARN); one no card runs is only listed with -v. With no usable shell at all, the fix
+    is the package of a shell the cards run, else any one of the released shells."""
     for p in problems:
         _item(rows, "WARN", "manifest %s" % p)
     good = [s for s in shells if s["installed"] and not s["bad"]]
     for s in shells:
+        by = runners.get(s["rom_ts"])
+        runs = "; card %s runs it" % ", ".join(str(i) for i in by) if by else ""
         if s["installed"] and not s["bad"]:
             _item(rows, "ok", "shell %s: images verified (sha256)%s" % (
                 shell_label(s), "" if s["source"] == "built-in" else ", manifest %s" % s["source"]))
         elif s["partial"]:
             _item(rows, "WARN", "shell %s: only partly on this host (%d of 5 files, not from the package): not "
-                  "flashable" % (shell_label(s), 5 - len(s["bad"])), "to flash it: %s" % install_hint(s))
+                  "flashable%s" % (shell_label(s), 5 - len(s["bad"]), runs), "install its package: %s" % install_hint(s))
         elif s["bad"]:
             _item(rows, "FAIL", "shell %s: %s" % (shell_label(s), "; ".join(s["bad"])),
                   "reinstall: %s" % install_hint(s))
+        elif by:
+            _item(rows, "WARN", "shell %s: not installed%s" % (shell_label(s), runs),
+                  "install its package: %s" % install_hint(s))
         else:
-            _item(rows, "MISSING" if not good else "info", "shell %s: not installed" % shell_label(s),
-                  install_hint(s))
+            _item(rows, "info", "shell %s: not installed" % shell_label(s), install_hint(s))
+    if not good:
+        run = [s for s in shells if runners.get(s["rom_ts"])]
+        _item(rows, "MISSING", "no shell package is installed, so no card can be flashed%s" % (
+            ": install the package of the shell your cards run" if run else
+            ": install the package of the shell you want (any one)"), [install_hint(s) for s in (run or shells)])
+        rows[-1]["any"] = not run and len(shells) > 1
     return good
 
 
-def card_rows(host, rows, cs, shells, good):
-    nxt = []
+def identify_cards(host, cs, shells):
+    """[(card, shell, rom_ts, the known shell it runs or None)]; identifies each card once."""
+    out = []
     for c in cs:
         sh = H.Shell(host, c)
         if c["state"] == "OUR_SHELL?":
             sh.identify()
             c["state"] = sh.state
         ts, run = running_shell(c, sh, shells)
+        out.append((c, sh, ts, run))
+    return out
+
+
+def card_rows(host, rows, ids, good):
+    nxt = []
+    cs = [i[0] for i in ids]
+    for c, sh, ts, run in ids:
         head = "card %d (ConnectX %s)" % (c["index"], c["cx5"][0])
         now = ("runs %s" % run["name"]) if run else ("runs ROM_TS %d (%s)" % (ts, sh.name or sh.vbnv or "?")
                                                       if ts is not None else "state %s" % c["state"])
@@ -350,6 +372,10 @@ def card_rows(host, rows, cs, shells, good):
     return nxt
 
 
+def _fixes(r):
+    return r["fix"] if isinstance(r["fix"], list) else [r["fix"]] if r["fix"] else []
+
+
 def cmd_setup(host, args, app_ver, cards_fn):
     """Read-only: what this host has and what flashing a card needs, with the command that fixes each gap."""
     shells, problems = known_shells(host)
@@ -358,15 +384,20 @@ def cmd_setup(host, args, app_ver, cards_fn):
     rows = []
     xrt_rows(host, rows, shells)
     areg_rows(host, rows, app_ver)
-    good = shell_rows(rows, shells, problems)
     cs = cards_fn()
+    ids = identify_cards(host, cs, shells)
+    runners = {}
+    for c, _, ts, _ in ids:
+        if ts is not None:
+            runners.setdefault(ts, []).append(c["index"])
+    good = shell_rows(rows, shells, problems, runners)
     if not cs:
         _item(rows, "WARN", "no Innova-2 card found (no ConnectX-5 behind an Innova-2 switch)")
     for c in cs:
         if host.driver(c["cx5"][0]) != "mlx5_core":
             _item(rows, "MISSING", "ConnectX-5 %s has no mlx5_core driver" % c["cx5"][0],
                   "install the inbox mlx5 driver (linux-modules-extra) or MLNX/DOCA-OFED")
-    nxt = card_rows(host, rows, cs, shells, good)
+    nxt = card_rows(host, rows, ids, good)
     bad = [r for r in rows if r["level"] in ("MISSING", "FAIL")]
     if getattr(args, "json", False):
         print(H.jdump(dict(items=rows, shells=shells, next=nxt, ready=not bad)))
@@ -377,19 +408,80 @@ def cmd_setup(host, args, app_ver, cards_fn):
             continue
         print("%-*s  %s" % (w, r["level"], r["what"]))
         if r["fix"] and r["level"] != "ok":
-            print("%-*s    -> %s" % (w, "", r["fix"]))
+            for f in _fixes(r):
+                print("%-*s    -> %s" % (w, "", f))
     if not getattr(args, "verbose", False) and any(r["level"] == "info" for r in rows):
         print("(-v: also the shells that are available but not installed)")
-    fixes = [r["fix"] for r in bad if r["fix"]]
+    fixes = [("any one of:", _fixes(r)) if r.get("any") else (f, None) for r in bad for f in
+             (_fixes(r)[:1] if r.get("any") else _fixes(r))]
     if fixes:
         print("\nto do first:")
-        for f in dict.fromkeys(fixes):
+        for f, alt in dict.fromkeys((f, tuple(alt) if alt else None) for f, alt in fixes):
             print("  " + f)
+            for a in alt or ():
+                print("    " + a)
     elif nxt:
         print("\nnext:")
         for n in dict.fromkeys(nxt):
             print("  " + n)
     return 1 if bad else 0
+
+
+# ----------------------------------------------------------------------------------------------- shells
+def shell_state(s):
+    if s["installed"] and not s["bad"]:
+        return "flashable"
+    if s.get("partial"):
+        return "partial"
+    if s["bad"]:
+        return "damaged"
+    return "not installed"
+
+
+def cmd_shells(host, args, cards_fn):
+    """Every shell this tool knows (manifests on the host, then the built-in released shells): flashable, partial
+    (files copied by hand, no package), damaged or not installed, and which cards run it. Exit 0 when at least one is
+    flashable."""
+    shells, problems = known_shells(host)
+    for s in shells:
+        inspect_shell(host, s)
+    cs = cards_fn()
+    ids = identify_cards(host, cs, shells)
+    rows = []
+    for s in shells:
+        st = shell_state(s)
+        by = [c["index"] for c, _, ts, _ in ids if ts == s["rom_ts"]]
+        rows.append(dict(name=s["name"], package=s["package"], version=s.get("installed_version") or s["version"],
+                         installed_version=s.get("installed_version"), vbnv=s["vbnv"], rom_ts=s["rom_ts"], state=st,
+                         problems=s["bad"], cards=by, source=s["source"], flash_tool=s["flash_tool"],
+                         images={r: s["images"][r]["path"] for r in IMAGE_ROLES},
+                         flash=("sudo innova2-smi flash%s --shell '%s'" % (" -d CARD" if len(cs) > 1 else "", s["name"])
+                                if st == "flashable" else None),
+                         install=None if st == "flashable" else install_hint(s)))
+    ok = any(r["state"] == "flashable" for r in rows)
+    if getattr(args, "json", False):
+        print(H.jdump(rows))
+        return 0 if ok else 1
+    for p in problems:
+        print("note: manifest %s" % p)
+    head = ("shell", "package", "version", "ROM_TS", "state", "cards")
+    tab = [head] + [(r["name"], r["package"], r["version"] + ("" if r["installed_version"] or r["state"] != "flashable"
+                                                               else " (no package)"),
+                     str(r["rom_ts"]), r["state"], ",".join(str(i) for i in r["cards"]) or "-") for r in rows]
+    w = [max(len(x[i]) for x in tab) for i in range(len(head))]
+    for x in tab:
+        print("  ".join(v.ljust(w[i]) for i, v in enumerate(x)).rstrip())
+    for r in rows:
+        if r["state"] == "flashable":
+            print("%s: %s" % (r["name"], r["flash"]))
+        elif r["state"] != "not installed" or r["cards"] or getattr(args, "verbose", False):
+            why = "; ".join(r["problems"]) if r["state"] == "damaged" else ""
+            print("%s: %s%s -> %s" % (r["name"], r["state"], " (%s)" % why if why else
+                                       " (files copied by hand, no package)" if r["state"] == "partial" else "",
+                                       r["install"]))
+    if any(r["state"] == "not installed" and not r["cards"] for r in rows) and not getattr(args, "verbose", False):
+        print("(-v: also how to install the shells no card runs)")
+    return 0 if ok else 1
 
 
 # ----------------------------------------------------------------------------------------------- flash

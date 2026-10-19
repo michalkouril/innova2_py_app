@@ -1,3 +1,17 @@
+innova2-app (1.3.26) unstable; urgency=medium
+
+  * innova2-smi setup: a shell a card runs but whose package is missing is a
+    WARN that names the card and the package; a shell no card runs is listed
+    only with -v. With no usable shell installed, the fix is the package of
+    the shells the cards run (any one of the released shells when the cards
+    run none), instead of every released shell as MISSING.
+  * innova2-smi shells: every known shell with its state (flashable,
+    partial = files copied by hand, damaged, not installed), the cards
+    running it, and the flash or install command. --json; exit 0 when one
+    is flashable.
+
+ -- Michal Kouril <xmkouril@gmail.com>  Mon, 19 Oct 2026 14:00:00 -0400
+
 innova2-app (1.3.25) unstable; urgency=medium
 
   * innova2-smi setup: read-only host check -- XRT, innova2_areg, the

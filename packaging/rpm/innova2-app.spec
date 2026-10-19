@@ -15,7 +15,7 @@
 %global dkms_ver  1.0
 
 Name:           innova2-app
-Version: 1.3.25
+Version: 1.3.26
 Release:        0.1%{?dist}
 Summary:        Management app and shell health tool for the Mellanox Innova-2 Flex FPGA card
 License:        Apache-2.0 AND Linux-OpenIB AND GPL-2.0-only
@@ -108,6 +108,9 @@ fi
 %{_prefix}/lib/modules-load.d/innova2_areg.conf
 
 %changelog
+* Mon Oct 19 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.26-0.1
+- innova2-smi setup: suggests the package of the shell a card runs, not every released shell.
+- innova2-smi shells: every known shell, its state (flashable/partial/damaged/not installed) and the cards running it.
 * Mon Oct 19 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.25-0.1
 - innova2-smi setup (read-only host check with fixes) and flash (User slot, via the shell package's tool or the Flex burn).
 * Sun Oct 18 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.24-0.1

@@ -1384,10 +1384,39 @@ class FlashTests(unittest.TestCase):
         h = flash_host()
         rc, o, e = run_cli(h, ["setup"])
         self.assertEqual(rc, 1, o + e)
-        self.assertIn("MISSING  shell noddr r1", o)
-        self.assertIn("innova2-noddr_202320.3.0-2_all.deb && sudo apt install ./innova2-noddr_202320.3.0-2_all.deb", o)
-        self.assertIn("to do first:", o)
+        self.assertIn("MISSING  no shell package is installed, so no card can be flashed: install the package of the "
+                      "shell you want (any one)", o)
+        self.assertIn("to do first:\n  any one of:\n    wget https://github.com/michalkouril/innova2_noddr_shell/"
+                      "releases/download/noddr-r1-2/innova2-noddr_202320.3.0-2_all.deb && sudo apt install "
+                      "./innova2-noddr_202320.3.0-2_all.deb\n    wget https://github.com/michalkouril/innova2_shell/", o)
+        self.assertNotIn("MISSING  shell", o)
         self.assertEqual(getattr(h, "live", []), [])
+
+    def test_setup_suggests_the_package_of_the_running_shell(self):
+        h = flash_host()                                 # x440-1: card runs r10, its files copied by hand
+        r10 = F.BUILTIN[1]
+        h.attrs_[("0000:08:00.0", "rom.m.1/timestamp")] = str(r10["rom_ts"])
+        h.files[r10["boot_xsabin"]["path"]] = b"x"
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 1)
+        self.assertIn("WARN     shell inn2x r10", o)
+        self.assertIn("not flashable; card 0 runs it", o)
+        self.assertIn("install the package of the shell your cards run", o)
+        todo = o.split("to do first:\n")[1]
+        self.assertIn("innova2-xdma_202320.4.0-1_all.deb", todo)
+        self.assertNotIn("noddr", todo)                  # no card runs noddr: not suggested
+        self.assertNotIn("any one of", todo)
+
+    def test_setup_running_shell_not_installed_at_all(self):
+        h = flash_host()
+        install_test_shell(h)                            # another shell is installed and usable
+        h.attrs_[("0000:08:00.0", "rom.m.1/timestamp")] = str(F.BUILTIN[0]["rom_ts"])
+        rc, o, e = run_cli(h, ["setup"])
+        self.assertEqual(rc, 0, o)
+        self.assertIn("WARN     shell noddr r1 (innova2-noddr 202320.3.0-2, innova2_innova2_noddr_202320_3, ROM_TS "
+                      "1792486800): not installed; card 0 runs it", o)
+        self.assertIn("-> install its package: wget", o)
+        self.assertNotIn("inn2x r10", o)                 # neither installed nor run: -v only
 
     def test_setup_ready_names_the_flash_command(self):
         h = flash_host()
@@ -1437,6 +1466,41 @@ class FlashTests(unittest.TestCase):
         self.assertIn("runs noddr r1 (its package is not installed); flashable (xrt route); to write another shell: "
                       "sudo innova2-smi flash --shell 'test r9'", o)
         self.assertNotIn("next:", o)
+
+    def test_shells_lists_states_and_cards(self):
+        h = flash_host()
+        install_test_shell(h)
+        noddr = F.BUILTIN[0]
+        h.files[noddr["boot_xsabin"]["path"]] = b"x"            # hand-copied, and the card runs it
+        h.attrs_[("0000:08:00.0", "rom.m.1/timestamp")] = str(noddr["rom_ts"])
+        rc, o, e = run_cli(h, ["shells"])
+        self.assertEqual(rc, 0, o + e)
+        lines = o.splitlines()
+        self.assertTrue(lines[0].startswith("shell"), o)
+        row = next(l for l in lines if l.startswith("test r9 "))
+        self.assertIn("flashable", row)
+        self.assertIn("(no package)", row)
+        row = next(l for l in lines if l.startswith("noddr r1 "))
+        self.assertRegex(row, r"partial\s+0$")
+        self.assertIn("test r9: sudo innova2-smi flash --shell 'test r9'", o)
+        self.assertIn("noddr r1: partial (files copied by hand, no package) -> wget", o)
+        self.assertNotIn("inn2x r10: ", o)                     # not installed, no card runs it: -v only
+        self.assertIn("inn2x r10: not installed -> wget", run_cli(h, ["shells", "-v"])[1])
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_shells_json_and_exit_code(self):
+        h = flash_host()
+        rc, o, e = run_cli(h, ["shells", "--json"])
+        self.assertEqual(rc, 1)                                 # nothing flashable
+        d = json.loads(o)
+        self.assertEqual([r["name"] for r in d], ["noddr r1", "inn2x r10"])
+        self.assertEqual({r["state"] for r in d}, {"not installed"})
+        install_test_shell(h, corrupt="mcs_secondary")
+        d = json.loads(run_cli(h, ["shells", "--json"])[1])
+        t = next(r for r in d if r["name"] == "test r9")
+        self.assertEqual(t["state"], "damaged")
+        self.assertIsNone(t["flash"])
+        self.assertIn("_secondary.mcs: sha256", t["problems"][0])
 
     def test_bad_manifest_is_ignored(self):
         h = flash_host()

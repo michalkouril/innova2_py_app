@@ -48,7 +48,7 @@ still accepted.)
 | file | what |
 |---|---|
 | `innova2_app.py` | the app. Vendor menus and options, plus `[ext]` batch commands (`--batch …`, `--transport`, `--yes`). |
-| `innova2_smi.py` (+ `innova2_smi_*.py`) | `innova2-smi`: query and test the Innova-2 XRT shell (see below). `innova2_smi_regmap.py` holds the register maps, `_hw` discovery and guarded MMIO, `_check` the passive check and its rules table, `_tests` / `_xrt` the active tests, `_flash` `setup` and `flash`. |
+| `innova2_smi.py` (+ `innova2_smi_*.py`) | `innova2-smi`: query and test the Innova-2 XRT shell (see below). `innova2_smi_regmap.py` holds the register maps, `_hw` discovery and guarded MMIO, `_check` the passive check and its rules table, `_tests` / `_xrt` the active tests, `_flash` `setup`, `shells` and `flash`. |
 | `docs/innova2_smi_prune_marker.md` | proposal: a marker the v++ prune hooks could put in the xclbin so `innova2-smi memory` can show PRUNED for PLRAM/HOST/PEER. |
 | `docs/innova2_smi_regmap.md` | the shell register map innova2-smi uses, generated from `innova2_smi_regmap.py` (`innova2-smi regmap --markdown`) and checked against `ddr_health.v` (`regmap --check-rtl`). |
 | `tests/` | innova2-smi unit tests against mock hosts (`python3 -m unittest discover -s tests`). |
@@ -183,6 +183,7 @@ than one card is present. `--json` always carries the full objects: one object f
 | `innova2-smi test NAME\|all` | active tests (below) |
 | `innova2-smi regmap` | the register maps; `--markdown`, `--check-rtl ddr_health.v` |
 | `innova2-smi setup [-v]` | read-only: XRT, `innova2_areg`, the shells installed on this host (every image checked against its sha256) and each card's state, with the command that fixes each gap and the `flash` command to run next. Installs nothing. Exit 0 when flashing can go ahead |
+| `innova2-smi shells [-v]` | every shell this tool knows (the host's manifests, then the built-in released shells): package and version, ROM_TS, state -- `flashable` (installed, every image matches its sha256), `partial` (files copied by hand, no package), `damaged`, `not installed` -- the cards running it, and the `flash --shell` or install command. Read-only; exit 0 when one is flashable |
 | `innova2-smi flash [-d CARD] [--shell NAME] [--dry-run]` | writes an installed shell into the card's User slot through the tool that already does it, schedules the User image, then asks you to cold cycle (below) |
 
 `-d` takes a card index, any BDF on the card (ConnectX or FPGA, `08:00` is enough) or the board serial. Every query
@@ -191,6 +192,7 @@ takes `--json`. `innova2-smi <command> -h` documents each command.
 **Flashing a card (1.3.25).** The shortest path from a new host to a card running a shell:
 ```
 sudo innova2-smi setup          # lists what is missing, with the apt/wget line for each; installs nothing
+sudo innova2-smi shells         # which shells can be flashed (and which cards run them)
 sudo innova2-smi flash          # -d CARD with several cards, --shell NAME with several shells installed
 # cold cycle (power off, then on)
 sudo innova2-smi check

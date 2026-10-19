@@ -18,6 +18,7 @@
                                            ecc-live, flash-verify)
   innova2-smi regmap [--markdown|--check-rtl ddr_health.v]   the register maps this tool uses
   innova2-smi setup                        what this host has and what flashing needs (read-only; prints the fixes)
+  innova2-smi shells                       the shells this host can flash (flashable / partial / damaged / not installed)
   innova2-smi flash    [-d CARD] [--shell NAME] [--dry-run]   write an installed shell into the User slot
 
 Read-only by default. Every register access goes through the running shell's OBS_ID register map; an unknown shell
@@ -45,7 +46,7 @@ import innova2_smi_hw as H             # noqa: E402
 import innova2_smi_regmap as R         # noqa: E402
 import innova2_smi_tests as T          # noqa: E402
 
-VERSION = "1.3.25"
+VERSION = "1.3.26"
 
 
 def _version():
@@ -353,6 +354,11 @@ def cmd_setup(host, args):
     """Read-only: XRT, innova2_areg, the shells installed on this host (images checked against their sha256) and
     every card's state, with the command that fixes each gap and the 'flash' command to run next."""
     return F.cmd_setup(host, args, _version(), lambda: cards(host, args))
+
+
+def cmd_shells(host, args):
+    """Every known shell: flashable, partial, damaged or not installed, and which cards run it."""
+    return F.cmd_shells(host, args, lambda: cards(host, args))
 
 
 def cmd_flash(host, args):
@@ -1580,6 +1586,11 @@ def build_parser():
             epilog="Nothing is installed or written: each gap is listed with the command that fixes it. "
                    "Exit 0 when flashing can go ahead, 1 otherwise. Shell packages: " + F.MANIFEST_DOC)
     q.add_argument("-v", "--verbose", action="store_true", help="also the shells available but not installed")
+    q = add("shells", cmd_shells, "the shells this host can flash, and the ones it cannot (and why)",
+            epilog="States: flashable (installed, every image matches its sha256), partial (some files copied by "
+                   "hand, no package), damaged (files missing or not matching), not installed. Exit 0 when at least "
+                   "one shell is flashable.")
+    q.add_argument("-v", "--verbose", action="store_true", help="also how to install the shells no card runs")
     q = add("flash", cmd_flash, "write an installed shell into the User slot of a card (confirmation)",
             epilog=FLASH_HELP)
     q.add_argument("--shell", help="the shell to write, by name, package or VBNV (needed when several are installed)")
