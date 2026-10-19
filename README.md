@@ -197,9 +197,13 @@ sudo innova2-smi flash          # -d CARD with several cards, --shell NAME with 
 # cold cycle (power off, then on)
 sudo innova2-smi check
 ```
-`flash` writes nothing itself and only ever the User slot. On a card running an innova2 XRT shell it runs the shell
-package's own flash tool (`innova2_flash_user`, `innova2_noddr_flash_user`: both flash chips probed, Factory scanned
-before and after); on a card running the Flex image it runs `innova2_app -b <chip0>.bin,0 -b <chip1>.bin,1 --batch
+`flash` writes nothing itself and only ever the User slot. On a card running an innova2 XRT shell it runs the steps
+of the shell package's own flash tool (`innova2_flash_user`, `innova2_noddr_flash_user`): both flash chips probed with
+the package's `xbflash.probe`, the Factory region scanned, stock `xbflash.qspi` writes, Factory scanned again and
+compared block by block. It runs them itself so the long ones (about a minute or two per scan, a few minutes for the
+write) show progress -- one dot per 64 KB block or xbflash beat, `x` for a block that fails (short read, or changed
+after writing), and done/total, elapsed and ETA at the end of each row; `--batch` draws none of it. The log, both
+scans and the tools' output are kept in `/var/tmp/innova2_flash/smi_<card>_<time>/`. On a card running the Flex image it runs `innova2_app -b <chip0>.bin,0 -b <chip1>.bin,1 --batch
 burn` (sampled read-back); any other state is refused with the image-select step that gets it to the Flex image. It
 then schedules the User image through the ConnectX (needs `innova2_areg`) when it is not already, and checks that the
 ConnectX reports it. `--dry-run` prints the plan and the commands. Shells are found from the manifest a shell package

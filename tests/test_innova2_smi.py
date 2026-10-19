@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import types
@@ -439,8 +440,11 @@ class MockHost:
     def regio(self, bdf, n, regions, guard):
         return MockIO(self.model, bdf.endswith(".1"), guard)
 
-    def run(self, cmd, timeout=60, env=None):
+    def run(self, cmd, timeout=60, env=None, cwd=None):
         self.runs.append(cmd)
+        if cmd[0].endswith("xbflash.probe"):
+            return 0, getattr(self, "probe_out", "ID PROBE: slave=0 RDID raw = FF 20 BB 20 10\n"
+                                                 "ID PROBE: slave=1 RDID raw = 00 20 BB 20 10\n")
         if cmd[-1] == "examine":
             return 0, self.examine
         if cmd[0] == "devlink":
@@ -455,6 +459,37 @@ class MockHost:
     def sha256(self, path):
         v = self.files.get(path)
         return None if v is None else hashlib.sha256(v if isinstance(v, bytes) else v.encode()).hexdigest()
+
+    def stream(self, cmd, on_chunk, env=None, cwd=None):
+        self.live = getattr(self, "live", []) + [cmd]
+        for c in getattr(self, "xbflash_out", []):
+            on_chunk(c)
+        if getattr(self, "flash_after", None):          # the write changes what the second scan reads
+            self.flash.update(self.flash_after)
+        return getattr(self, "xbflash_rc", 0)
+
+    def open_flash(self, path):
+        if path not in self.files:
+            raise OSError(2, "No such file")
+        h = self
+
+        class N:
+            def read_at(self, off, n):
+                return h.flash.get(off, b"\xff" * n)
+
+            def close(self):
+                pass
+        return N()
+
+    def count_lines(self, path, prefix):
+        v = self.files.get(path) or b""
+        return sum(1 for l in v.split(b"\n") if l.startswith(prefix.encode()))
+
+    def mkdirs(self, path):
+        pass
+
+    def write_text(self, path, text, append=False):
+        self.files[path] = (self.files.get(path, "") if append else "") + text
 
     def run_live(self, cmd, env=None):
         self.live = getattr(self, "live", []) + [cmd]
@@ -1501,6 +1536,86 @@ class FlashTests(unittest.TestCase):
         self.assertEqual(t["state"], "damaged")
         self.assertIsNone(t["flash"])
         self.assertIn("_secondary.mcs: sha256", t["problems"][0])
+
+    def _native(self, after=None):
+        h = flash_host()
+        m = install_test_shell(h)
+        h.files[m["images"]["mcs_primary"]["path"]] = b":0200000400FFFB\n" * 40      # 40 records: 2 dots a phase
+        h.files[m["images"]["mcs_secondary"]["path"]] = b":0200000400FFFB\n" * 40
+        for r in ("mcs_primary", "mcs_secondary"):
+            m["images"][r]["sha256"] = hashlib.sha256(h.files[m["images"][r]["path"]]).hexdigest()
+        h.files["/opt/xilinx/dsa/%s/innova2_flash.json" % TEST_VBNV] = json.dumps(m)
+        h.files["/opt/xilinx/dsa/%s/tools/xbflash.probe" % TEST_VBNV] = b"x"
+        h.attrs_[("0000:08:00.0", "instance")] = "2560"
+        h.files["/dev/xfpga/flash.m2560.0"] = b""
+        h.flash = {}
+        h.flash_after = after
+        h.xbflash_out = [b"Enabled bitstream guard. Bitstream will not be loaded.\nPreparing flash chip 0\n",
+                         b"INFO: ***Found 40 ELA Records\nErasing flash", b".", b".\nProgramming flash..",
+                         b"\nPreparing flash chip 1\nErasing flash..\nProgramming flash..\n",
+                         b"Cleared bitstream guard. Bitstream now active.\n"]
+        return h
+
+    def test_flash_xrt_native_progress(self):
+        h = self._native()
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertEqual(len(h.live), 1)                 # only xbflash.qspi wrote; probe ran read-only
+        self.assertEqual(h.live[0][0], F.XBFLASH)
+        self.assertIn("RDID raw = FF 20 BB 20", o)
+        self.assertIn("    " + "." * 64 + "   64/512", o)  # a full row of scan dots with the count
+        self.assertIn("512/512", o)
+        self.assertIn("ETA", o)
+        self.assertIn("chip 0 erase     ..", o)
+        self.assertIn("chip 1 program   ..", o)
+        self.assertIn("8/8", o)
+        self.assertIn("Factory unchanged: 0 of 512 blocks differ", o)
+        self.assertIn("FLASH-DONE", o)
+        logs = [p for p in h.files if p.endswith("/flash.log")]
+        self.assertTrue(logs and "Cleared bitstream guard" in h.files[logs[0]])
+        scans = [p for p in h.files if p.endswith("/factory_after.txt")]
+        self.assertEqual(len(h.files[scans[0]].splitlines()), 512)
+
+    def test_flash_xrt_native_marks_a_changed_factory_block(self):
+        h = self._native(after={(1 << 56) | 0x30000: b"\x00" * 0x10000})
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        scan2 = o.split("=== 4. Factory region scan after writing")[1]
+        rows = [l.split()[0] for l in scan2.splitlines() if re.fullmatch(r"    [.x]+ +\d+/512 .*", l)]
+        self.assertEqual(len(rows), 8, scan2)
+        self.assertEqual("".join(rows).count("x"), 1, scan2)
+        self.assertEqual("".join(rows).index("x"), 256 + 3)   # chip 1, block 3 (0x30000)
+        self.assertIn("Factory CHANGED: 1 of 512 blocks differ", o)
+        self.assertIn("do NOT power cycle", o)
+        self.assertNotIn("FLASH-DONE", o)
+
+    def test_flash_xrt_native_batch_draws_nothing(self):
+        h = self._native()
+        rc, o, e = run_cli(h, ["flash", "--yes", "--batch"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertNotIn("....", o)
+        self.assertNotIn("ETA", o)
+        self.assertIn("Factory unchanged", o)
+        self.assertIn("    ok (", o)
+
+    def test_flash_xrt_native_refuses_one_wired_chip(self):
+        h = self._native()
+        h.probe_out = "ID PROBE: slave=0 RDID raw = FF 20 BB 20 10\nID PROBE: slave=1 RDID raw = 00 00 00 00 00\n"
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("NOTHING was written", o)
+        self.assertIn("nothing was written", o)
+        self.assertEqual(getattr(h, "live", []), [])
+
+    def test_flash_xrt_native_write_error(self):
+        h = self._native()
+        h.xbflash_out = [b"Preparing flash chip 0\nErasing flash.\nERROR: Failed to erase subsector!\n"]
+        h.xbflash_rc = 1
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("ERROR: Failed to erase subsector!", o)
+        self.assertIn("do NOT power cycle", o)
+        self.assertNotIn("=== 4.", o)
 
     def test_bad_manifest_is_ignored(self):
         h = flash_host()

@@ -86,6 +86,24 @@ class RegIO:
         ctypes.c_uint32.from_address(self._addr(off)).value = val & 0xFFFFFFFF
 
 
+class _FlashNode:
+    def __init__(self, path):
+        self.fd = os.open(path, os.O_RDONLY)
+
+    def read_at(self, off, n):
+        os.lseek(self.fd, off, os.SEEK_SET)
+        buf = b""
+        while len(buf) < n:
+            c = os.read(self.fd, n - len(buf))
+            if not c:
+                break
+            buf += c
+        return buf
+
+    def close(self):
+        os.close(self.fd)
+
+
 class Host:
     """The real machine."""
 
@@ -142,9 +160,9 @@ class Host:
     def regio(self, bdf, n, regions, guard):
         return RegIO(os.path.join(SYS_PCI, bdf, "resource%d" % n), regions, guard)
 
-    def run(self, cmd, timeout=60, env=None):
+    def run(self, cmd, timeout=60, env=None, cwd=None):
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
             return p.returncode, p.stdout + p.stderr
         except FileNotFoundError as e:
             return 127, str(e)
@@ -158,6 +176,41 @@ class Host:
         except OSError as e:
             print("*** %s: %s" % (cmd[0], e), file=sys.stderr)
             return 127
+
+    def stream(self, cmd, on_chunk, env=None, cwd=None):
+        """Run with stdout+stderr piped and hand every chunk to on_chunk as it arrives (unbuffered: a tool's progress
+        dots come through before its newline); the return code."""
+        try:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                 env=env, cwd=cwd)
+        except OSError as e:
+            on_chunk(("*** %s: %s\n" % (cmd[0], e)).encode())
+            return 127
+        while True:
+            b = os.read(p.stdout.fileno(), 4096)
+            if not b:
+                break
+            on_chunk(b)
+        p.stdout.close()
+        return p.wait()
+
+    def open_flash(self, path):
+        """A read-only flash node (/dev/xfpga/flash.m*): read_at(offset, n), close()."""
+        return _FlashNode(path)
+
+    def count_lines(self, path, prefix):
+        try:
+            with open(path, "rb") as f:
+                return sum(1 for l in f if l.startswith(prefix.encode()))
+        except OSError:
+            return 0
+
+    def mkdirs(self, path):
+        os.makedirs(path, exist_ok=True)
+
+    def write_text(self, path, text, append=False):
+        with open(path, "a" if append else "w") as f:
+            f.write(text)
 
     def sha256(self, path):
         h = hashlib.sha256()

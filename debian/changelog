@@ -9,6 +9,14 @@ innova2-app (1.3.26) unstable; urgency=medium
     partial = files copied by hand, damaged, not installed), the cards
     running it, and the flash or install command. --json; exit 0 when one
     is flashable.
+  * innova2-smi flash, XRT route: runs the package flash tool's steps itself
+    (probe with the package's xbflash.probe, Factory scan, xbflash.qspi,
+    Factory scan) so the long ones show progress: one dot per 64 KB block
+    or xbflash beat, 'x' for a failing or changed block, done/total,
+    elapsed and ETA per row. The scan is byte-identical to qspi_scan.py.
+    --batch draws none of it. Log and scans in
+    /var/tmp/innova2_flash/smi_<card>_<time>/. A package without
+    xbflash.probe has its flash tool run as before.
 
  -- Michal Kouril <xmkouril@gmail.com>  Mon, 19 Oct 2026 14:00:00 -0400
 
