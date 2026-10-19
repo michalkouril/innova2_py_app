@@ -685,6 +685,18 @@ def shell_state(s):
     return "not installed"
 
 
+def flash_commands(s, state, cs, running):
+    """The flash command for each card that does not already run the shell (-d only when the host has several)."""
+    if state != "flashable":
+        return []
+    todo = [c["index"] for c in cs if c["index"] not in running]
+    if not cs:
+        return ["sudo innova2-smi flash --shell '%s'" % s["name"]]
+    if len(cs) == 1:
+        return ["sudo innova2-smi flash --shell '%s'" % s["name"]] if todo else []
+    return ["sudo innova2-smi flash -d %d --shell '%s'" % (i, s["name"]) for i in todo]
+
+
 def cmd_shells(host, args, cards_fn):
     """Every shell this tool knows (manifests on the host, then the built-in released shells): flashable, partial
     (files copied by hand, no package), damaged or not installed, and which cards run it. Exit 0 when at least one is
@@ -702,9 +714,9 @@ def cmd_shells(host, args, cards_fn):
                          installed_version=s.get("installed_version"), vbnv=s["vbnv"], rom_ts=s["rom_ts"], state=st,
                          problems=s["bad"], cards=by, source=s["source"], flash_tool=s["flash_tool"],
                          images={r: s["images"][r]["path"] for r in IMAGE_ROLES},
-                         flash=("sudo innova2-smi flash%s --shell '%s'" % (" -d CARD" if len(cs) > 1 else "", s["name"])
-                                if st == "flashable" else None),
+                         flash_commands=flash_commands(s, st, cs, by),
                          install=None if st == "flashable" else install_hint(s)))
+        rows[-1]["flash"] = (rows[-1]["flash_commands"] or [None])[0]
     ok = any(r["state"] == "flashable" for r in rows)
     if getattr(args, "json", False):
         print(H.jdump(rows))
@@ -719,8 +731,11 @@ def cmd_shells(host, args, cards_fn):
     for x in tab:
         print("  ".join(v.ljust(w[i]) for i, v in enumerate(x)).rstrip())
     for r in rows:
-        if r["state"] == "flashable":
-            print("%s: %s" % (r["name"], r["flash"]))
+        if r["state"] == "flashable" and r["flash_commands"]:
+            print("%s: %s" % (r["name"], ", ".join(r["flash_commands"])))
+        elif r["state"] == "flashable":
+            print("%s: card %s already runs it: nothing to flash (flash --force writes it again)" % (
+                r["name"], ", ".join(str(i) for i in r["cards"])))
         elif r["state"] != "not installed" or r["cards"] or getattr(args, "verbose", False):
             why = "; ".join(r["problems"]) if r["state"] == "damaged" else ""
             print("%s: %s%s -> %s" % (r["name"], r["state"], " (%s)" % why if why else

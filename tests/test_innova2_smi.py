@@ -1523,6 +1523,26 @@ class FlashTests(unittest.TestCase):
         self.assertIn("inn2x r10: not installed -> wget", run_cli(h, ["shells", "-v"])[1])
         self.assertEqual(getattr(h, "live", []), [])
 
+    def test_shells_no_flash_command_for_the_running_shell(self):
+        h = flash_host()
+        install_test_shell(h, rom_ts=ROM_TS[0x0B5E0006])      # installed, and the card already runs it
+        rc, o, e = run_cli(h, ["shells"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("test r9: card 0 already runs it: nothing to flash (flash --force writes it again)", o)
+        self.assertNotIn("innova2-smi flash --shell 'test r9'", o)
+        d = json.loads(run_cli(h, ["shells", "--json"])[1])
+        t9 = next(r for r in d if r["name"] == "test r9")
+        self.assertEqual((t9["state"], t9["cards"], t9["flash_commands"], t9["flash"]), ("flashable", [0], [], None))
+
+    def test_shells_flash_commands_per_card(self):
+        cs = [dict(index=0), dict(index=1)]
+        s = dict(name="noddr r1")
+        self.assertEqual(F.flash_commands(s, "flashable", cs, [0]), ["sudo innova2-smi flash -d 1 --shell 'noddr r1'"])
+        self.assertEqual(F.flash_commands(s, "flashable", cs, [0, 1]), [])
+        self.assertEqual(len(F.flash_commands(s, "flashable", cs, [])), 2)
+        self.assertEqual(F.flash_commands(s, "partial", cs, []), [])
+        self.assertEqual(F.flash_commands(s, "flashable", [], []), ["sudo innova2-smi flash --shell 'noddr r1'"])
+
     def test_shells_json_and_exit_code(self):
         h = flash_host()
         rc, o, e = run_cli(h, ["shells", "--json"])
