@@ -280,6 +280,21 @@ class Progress:
 # ----------------------------------------------------------------------------------------------- XRT route, native
 FLASH_WORK = "/var/tmp/innova2_flash"      # persistent scratch, as the shell packages' flash tools (never /tmp)
 FACTORY_END, SCAN_BLOCK = 0x1000000, 0x10000
+# The sampled Factory check (default): every 8th 64 KB block of each chip (one per 512 KB), the last block, and the
+# block holding XRT's default dual-QSPI bitstream guard (0x00801000, inside Factory on this card). The ways a User-slot
+# write can land in Factory damage it contiguously -- a dropped address bit 24 wraps the whole image onto Factory's
+# start, a wrong MCS base address shifts it -- so any misplaced write of 512 KB or more hits a sampled block; the one
+# single-block risk, the guard, is sampled by address. --full-factory-check reads all 256 blocks per chip.
+SAMPLE_STRIDE, GUARD_ADDR = 8, 0x00801000
+
+
+def factory_blocks(mode):
+    """The block offsets (per chip) the Factory check reads."""
+    n = FACTORY_END // SCAN_BLOCK
+    if mode == "full":
+        return [i * SCAN_BLOCK for i in range(n)]
+    return sorted({i * SCAN_BLOCK for i in range(0, n, SAMPLE_STRIDE)} | {(n - 1) * SCAN_BLOCK,
+                                                                         GUARD_ADDR & ~(SCAN_BLOCK - 1)})
 
 
 def tools_dir(s):
@@ -316,9 +331,11 @@ def probe_chips(host, ctx, s):
 
 
 def scan_factory(host, ctx, name, ref=None):
-    """READ-ONLY sha1 of every 64 KB block of the Factory region (0x0..0xFFFFFF) of both chips, as qspi_scan.py.
-    ref: an earlier scan; a block that differs from it is drawn 'x'. A short read is an 'x' too."""
-    n = 2 * FACTORY_END // SCAN_BLOCK
+    """READ-ONLY sha1 of 64 KB blocks of the Factory region (0x0..0xFFFFFF) of both chips, as qspi_scan.py: all of
+    them (ctx['factory'] == 'full') or the sampled set (factory_blocks). ref: an earlier scan of the same blocks; a
+    block that differs from it is drawn 'x'. A short read is an 'x' too."""
+    blocks = factory_blocks(ctx["factory"])
+    n = 2 * len(blocks)
     pr = Progress(n, ctx["quiet"])
     res, fails = [], 0
     try:
@@ -328,7 +345,7 @@ def scan_factory(host, ctx, name, ref=None):
         return 1, None
     try:
         for slave in (0, 1):
-            for off in range(0, FACTORY_END, SCAN_BLOCK):
+            for off in blocks:
                 b = f.read_at((slave << 56) | off, SCAN_BLOCK)
                 h = hashlib.sha1(b).hexdigest()
                 res.append((slave, off, h, len(b)))
@@ -344,7 +361,9 @@ def scan_factory(host, ctx, name, ref=None):
     el = pr.finish()
     host.write_text(os.path.join(ctx["work"], name), "".join("%d 0x%08X %s %d\n" % r for r in res))
     short = sum(1 for r in res if r[3] != SCAN_BLOCK)
-    print("    read %d blocks of 64 KB in %s%s" % (n, _mmss(el), "; %d short reads" % short if short else ""))
+    print("    read %d blocks of 64 KB (%s) in %s%s" % (n, "all of Factory" if ctx["factory"] == "full" else
+                                                        "sampled: every %dth, the last, the guard's" % SAMPLE_STRIDE,
+                                                        _mmss(el), "; %d short reads" % short if short else ""))
     if short:
         return 1, None
     if ref is not None:
@@ -394,7 +413,12 @@ def write_chips(host, ctx, s):
     return 1 if rc or errs else 0
 
 
-def xrt_native_steps(host, card, s):
+def factory_what(mode):
+    n = 2 * len(factory_blocks(mode))
+    return "%d blocks%s" % (n, "" if mode == "full" else ", sampled (--full-factory-check: all 512)")
+
+
+def xrt_native_steps(host, card, s, factory="sampled"):
     """The package flash tool's steps, run here so the long ones can show progress. None when the package has no
     xbflash.probe (then its flash tool runs as is)."""
     if not host.exists(probe_tool(s)):
@@ -408,16 +432,20 @@ def xrt_native_steps(host, card, s):
             card["index"], bo))
     if inst is None or not host.exists(fdev):
         raise H.Refused("card %d: no %s for the Factory check (xclmgmt not bound?)" % (card["index"], fdev))
-    return [dict(what="probe both flash chips (read-only, %s)" % os.path.basename(probe_tool(s)), native="probe",
-                 cmd=["(%s --card %s, XBFLASH_PROBE_BOTH=1)" % (probe_tool(s), mgmt)]),
-            dict(what="Factory region scan before writing (%s, both chips, 512 blocks)" % fdev, native="scan0",
-                 cmd=["(read-only sha1 of 0x0..0xFFFFFF in 64 KB blocks)"]),
-            dict(what="write both chips (xbflash.qspi via the shell's quad-SPI controller)", native="write",
+    probe = dict(what="probe both flash chips (read-only, %s)" % os.path.basename(probe_tool(s)), native="probe",
+                 cmd=["(%s --card %s, XBFLASH_PROBE_BOTH=1)" % (probe_tool(s), mgmt)])
+    write = dict(what="write both chips (xbflash.qspi via the shell's quad-SPI controller)", native="write",
                  cmd=["FLASH_VIA_USER=1 %s --primary %s --secondary %s --card %s --bar 0 --bar-offset 0x40000 --force"
                       % (XBFLASH, os.path.basename(s["images"]["mcs_primary"]["path"]),
-                         os.path.basename(s["images"]["mcs_secondary"]["path"]), mgmt)]),
-            dict(what="Factory region scan after writing (every block must be unchanged)", native="scan1",
-                 cmd=["(the same scan, compared block by block)"])], fdev
+                         os.path.basename(s["images"]["mcs_secondary"]["path"]), mgmt)])
+    if factory == "skip":
+        return [probe, write], fdev
+    return [probe,
+            dict(what="Factory region scan before writing (%s, both chips, %s)" % (fdev, factory_what(factory)),
+                 native="scan0", cmd=["(read-only sha1 of 64 KB blocks of 0x0..0xFFFFFF)"]),
+            write,
+            dict(what="Factory region scan after writing (every block read must be unchanged)", native="scan1",
+                 cmd=["(the same blocks, compared one by one)"])], fdev
 
 
 def run_native(host, st, ctx, s):
@@ -434,14 +462,14 @@ def run_native(host, st, ctx, s):
     raise AssertionError(k)
 
 
-def plan(host, card, sh, s):
+def plan(host, card, sh, s, factory="sampled"):
     """The commands 'flash' runs, in order, with what each needs. Refused when a precondition fails."""
     how, why = route(host, card, sh)
     cx5 = card["cx5"][0]
     steps, needs, fdev = [], [], None
     if how == "xrt":
         needs += [XBFLASH] + [s["images"][r]["path"] for r in ("mcs_primary", "mcs_secondary")]
-        nat = xrt_native_steps(host, card, s)
+        nat = xrt_native_steps(host, card, s, factory)
         if nat:
             steps, fdev = nat
             why = why.replace("the shell package's flash tool writes", "xbflash.qspi writes") + \
@@ -449,7 +477,8 @@ def plan(host, card, sh, s):
         else:
             needs.append(s["flash_tool"])
             steps.append(dict(what="write the User slot (%s)" % os.path.basename(s["flash_tool"]),
-                              cmd=[s["flash_tool"], "--card", card["mgmt"], "--yes"], first_write=True))
+                              cmd=[s["flash_tool"], "--card", card["mgmt"], "--yes"] +
+                              (["--skip-factory-check"] if factory == "skip" else []), first_write=True))
     else:
         needs += [APP, os.path.join(HERE, "rawspi.py"), cx5_node(host, card)]
         steps.append(dict(what="burn both chips through the Flex image's burn endpoint (innova2_app)",
@@ -730,7 +759,11 @@ def cmd_flash(host, args, cards_fn, confirm):
     if ts == s["rom_ts"] and not args.force:
         print("the card already runs this shell: nothing to do (--force writes it again)")
         return 0
-    p = plan(host, card, sh, s)
+    factory = "skip" if args.skip_factory_check else "full" if args.full_factory_check else "sampled"
+    p = plan(host, card, sh, s, factory)
+    if factory == "skip" and p["route"] == "xrt":
+        print("note: --skip-factory-check: Factory is not checked; a misplaced write would go unnoticed until the "
+              "card falls back")
     print("route: %s" % p["why"])
     for i, st in enumerate(p["steps"], 1):
         print("  %d. %s\n     %s" % (i, st["what"], " ".join(st["cmd"])))
@@ -746,7 +779,8 @@ def cmd_flash(host, args, cards_fn, confirm):
                                                      time.strftime("%Y%m%d_%H%M%S", time.localtime(host.now()))))
     host.mkdirs(work)
     logp = os.path.join(work, "flash.log")
-    ctx = dict(mgmt=card.get("mgmt"), fdev=p["fdev"], work=work, quiet=args.batch, before=None, buf=[])
+    ctx = dict(mgmt=card.get("mgmt"), fdev=p["fdev"], work=work, quiet=args.batch, before=None, buf=[],
+               factory=factory)
     ctx["log"] = lambda txt: (ctx["buf"].append(txt), host.write_text(logp, txt, append=True))
     ctx["logged"] = lambda: "".join(ctx["buf"])
     print("log and scans: %s" % work)

@@ -1454,7 +1454,9 @@ THROTTLE_HELP = """actions (E7a2 and later; state changes ask for confirmation u
 FLASH_HELP = """Only the User slot (0x01000000) is written; Factory and Flex never are. The route follows what the card runs:
   an innova2 XRT shell (10ee:788f, xclmgmt bound): the shell package's flash-tool steps -- both flash chips probed
       (the package's xbflash.probe), Factory scanned, xbflash.qspi writes, Factory scanned again and compared block
-      by block. The scans and the write draw progress: one dot per 64 KB block or per xbflash beat, 'x' for a block
+      by block. The Factory check is SAMPLED by default: 66 of the 512 64 KB blocks (every 8th per chip, the last,
+      the one holding XRT's default bitstream guard 0x00801000), which every misplaced write of 512 KB or more hits;
+      --full-factory-check reads all 512, --skip-factory-check none. The scans and the write draw progress: one dot per 64 KB block or per xbflash beat, 'x' for a block
       that fails (short read, or changed after writing), done/total, elapsed and ETA per row. --batch: none of it;
       the log, both scans and the tools' output are kept in /var/tmp/innova2_flash/smi_<card>_<time>/;
   the Flex image (burn endpoint 15b3:0264): innova2_app -b <chip0>.bin,0 -b <chip1>.bin,1 --batch burn (its own
@@ -1600,6 +1602,11 @@ def build_parser():
     q.add_argument("--shell", help="the shell to write, by name, package or VBNV (needed when several are installed)")
     q.add_argument("--dry-run", action="store_true", help="show the plan and the commands; write nothing")
     q.add_argument("--force", action="store_true", help="write even when the card already runs this shell")
+    g = q.add_mutually_exclusive_group()
+    g.add_argument("--full-factory-check", action="store_true",
+                   help="XRT route: scan all 512 Factory blocks before and after writing (about 1-2 min each) instead "
+                        "of the sampled 66 (every 8th block, the last, the bitstream guard's)")
+    g.add_argument("--skip-factory-check", action="store_true", help="XRT route: no Factory scan at all")
     q.add_argument("--batch", action="store_true", help="no progress dots or ETA (step lines and results only; the "
                                                          "tools' own output goes to the log)")
     q = add("regmap", cmd_regmap, "the register maps this tool uses")

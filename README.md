@@ -200,8 +200,13 @@ sudo innova2-smi check
 `flash` writes nothing itself and only ever the User slot. On a card running an innova2 XRT shell it runs the steps
 of the shell package's own flash tool (`innova2_flash_user`, `innova2_noddr_flash_user`): both flash chips probed with
 the package's `xbflash.probe`, the Factory region scanned, stock `xbflash.qspi` writes, Factory scanned again and
-compared block by block. It runs them itself so the long ones (about a minute or two per scan, a few minutes for the
-write) show progress -- one dot per 64 KB block or xbflash beat, `x` for a block that fails (short read, or changed
+compared block by block. The Factory check is sampled by default: 66 of the 512 64 KB blocks (every 8th per chip,
+the last, and the one holding XRT's default bitstream guard at 0x00801000), about 10 s per scan. The ways a User-slot
+write can land in Factory damage it contiguously (a dropped address bit wraps the image onto Factory's start, a wrong
+MCS base shifts it), so every misplaced write of 512 KB or more hits a sampled block; `--full-factory-check` reads all
+512 (1-2 min per scan), `--skip-factory-check` none. These scans read through `/dev/xfpga`, which can misread; they
+catch a misplaced write, they do not prove Factory is good (verify that with rawspi). It runs the steps itself so the
+long ones (the scans, a few minutes for the write) show progress -- one dot per 64 KB block or xbflash beat, `x` for a block that fails (short read, or changed
 after writing), and done/total, elapsed and ETA at the end of each row; `--batch` draws none of it. The log, both
 scans and the tools' output are kept in `/var/tmp/innova2_flash/smi_<card>_<time>/`. On a card running the Flex image it runs `innova2_app -b <chip0>.bin,0 -b <chip1>.bin,1 --batch
 burn` (sampled read-back); any other state is refused with the image-select step that gets it to the Flex image. It

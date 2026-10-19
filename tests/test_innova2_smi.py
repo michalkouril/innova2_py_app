@@ -1558,7 +1558,7 @@ class FlashTests(unittest.TestCase):
 
     def test_flash_xrt_native_progress(self):
         h = self._native()
-        rc, o, e = run_cli(h, ["flash", "--yes"])
+        rc, o, e = run_cli(h, ["flash", "--yes", "--full-factory-check"])
         self.assertEqual(rc, 0, o + e)
         self.assertEqual(len(h.live), 1)                 # only xbflash.qspi wrote; probe ran read-only
         self.assertEqual(h.live[0][0], F.XBFLASH)
@@ -1578,7 +1578,7 @@ class FlashTests(unittest.TestCase):
 
     def test_flash_xrt_native_marks_a_changed_factory_block(self):
         h = self._native(after={(1 << 56) | 0x30000: b"\x00" * 0x10000})
-        rc, o, e = run_cli(h, ["flash", "--yes"])
+        rc, o, e = run_cli(h, ["flash", "--yes", "--full-factory-check"])
         self.assertEqual(rc, 1)
         scan2 = o.split("=== 4. Factory region scan after writing")[1]
         rows = [l.split()[0] for l in scan2.splitlines() if re.fullmatch(r"    [.x]+ +\d+/512 .*", l)]
@@ -1588,6 +1588,41 @@ class FlashTests(unittest.TestCase):
         self.assertIn("Factory CHANGED: 1 of 512 blocks differ", o)
         self.assertIn("do NOT power cycle", o)
         self.assertNotIn("FLASH-DONE", o)
+
+    def test_flash_sampled_factory_check_is_the_default(self):
+        self.assertEqual(len(F.factory_blocks("sampled")), 33)
+        self.assertIn(F.GUARD_ADDR & ~0xFFFF, F.factory_blocks("sampled"))
+        self.assertIn(0xFF0000, F.factory_blocks("sampled"))
+        h = self._native()
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("66 blocks, sampled (--full-factory-check: all 512)", o)
+        self.assertIn("Factory unchanged: 0 of 66 blocks differ", o)
+        scans = [p for p in h.files if p.endswith("/factory_before.txt")]
+        self.assertEqual(len(h.files[scans[0]].splitlines()), 66)
+
+    def test_flash_sampled_check_catches_a_wrapped_image(self):
+        # a dropped address bit 24: the image lands on Factory's start (here 1 MB of it, chip 0)
+        h = self._native(after={off: b"\x00" * 0x10000 for off in range(0, 0x100000, 0x10000)})
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("Factory CHANGED: 2 of 66 blocks differ", o)   # blocks 0x0 and 0x80000
+
+    def test_flash_sampled_check_catches_the_guard_block(self):
+        h = self._native(after={0x800000: b"\x00" * 0x10000})
+        rc, o, e = run_cli(h, ["flash", "--yes"])
+        self.assertEqual(rc, 1)
+        self.assertIn("Factory CHANGED: 1 of 66 blocks differ", o)
+
+    def test_flash_skip_factory_check(self):
+        h = self._native()
+        rc, o, e = run_cli(h, ["flash", "--yes", "--skip-factory-check"])
+        self.assertEqual(rc, 0, o + e)
+        self.assertIn("note: --skip-factory-check", o)
+        self.assertNotIn("Factory region scan", o)
+        self.assertEqual(len(h.live), 1)
+        with self.assertRaises(SystemExit):              # argparse: the two are exclusive
+            run_cli(h, ["flash", "--yes", "--skip-factory-check", "--full-factory-check"])
 
     def test_flash_xrt_native_batch_draws_nothing(self):
         h = self._native()

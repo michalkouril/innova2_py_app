@@ -17,6 +17,12 @@ innova2-app (1.3.26) unstable; urgency=medium
     --batch draws none of it. Log and scans in
     /var/tmp/innova2_flash/smi_<card>_<time>/. A package without
     xbflash.probe has its flash tool run as before.
+  * innova2-smi flash: the Factory check is sampled by default -- 66 of the
+    512 64 KB blocks (every 8th per chip, the last, the one holding XRT's
+    default bitstream guard 0x00801000), 9 s per scan instead of 69 s on
+    the HP Z440. Every misplaced write of 512 KB or more (an address wrap,
+    a wrong MCS base) hits a sampled block. --full-factory-check reads all
+    512, --skip-factory-check none.
 
  -- Michal Kouril <xmkouril@gmail.com>  Mon, 19 Oct 2026 14:00:00 -0400
 

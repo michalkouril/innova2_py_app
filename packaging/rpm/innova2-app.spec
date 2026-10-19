@@ -112,6 +112,7 @@ fi
 - innova2-smi setup: suggests the package of the shell a card runs, not every released shell.
 - innova2-smi shells: every known shell, its state (flashable/partial/damaged/not installed) and the cards running it.
 - innova2-smi flash: progress dots ('x' = failure), elapsed and ETA for the Factory scans and the write; --batch.
+- innova2-smi flash: sampled Factory check by default (66 of 512 blocks); --full-factory-check, --skip-factory-check.
 * Mon Oct 19 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.25-0.1
 - innova2-smi setup (read-only host check with fixes) and flash (User slot, via the shell package's tool or the Flex burn).
 * Sun Oct 18 2026 Michal Kouril <xmkouril@gmail.com> - 1.3.24-0.1
